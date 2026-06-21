@@ -26,6 +26,7 @@ from bot.health import start_health_server
 from bot.scheduler import start_bot_scheduler
 from bot.middleware.session import restore_session, save_session
 from bot.middleware.locks import get_user_lock
+from bot.middleware.correlation import set_current_update_id
 from bot.handlers.start import handle_start, show_main_menu
 from bot.handlers.events import handle_filter
 from bot.handlers.navigation import handle_navigation
@@ -96,6 +97,8 @@ from bot.handlers.cinema import (
 
 
 async def _session_middleware(update: Update, context) -> None:
+    set_current_update_id(update.update_id)
+
     user_id = update.effective_user.id if update.effective_user else None
     if not user_id:
         return
@@ -172,10 +175,6 @@ async def main():
     bot_scheduler = start_bot_scheduler(app.bot, pool)
 
     app.add_handler(TypeHandler(Update, _session_middleware), group=-1)
-
-    # ----------------------------------------------------------
-    # Регистрация handlers — порядок важен
-    # ----------------------------------------------------------
 
     app.add_handler(CommandHandler('start', handle_start))
     app.add_handler(CommandHandler('cancel', handle_cancel))
