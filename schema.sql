@@ -124,3 +124,4 @@ CREATE TABLE IF NOT EXISTS cinema_descriptions (
     cinema_name TEXT PRIMARY KEY,
     description TEXT NOT NULL DEFAULT ''
 );
+
