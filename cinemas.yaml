@@ -1,0 +1,55 @@
+cinemas:
+  cineplexx_description: "Самая крупная сеть кинотеатров в Белграде"
+  cineplexx:
+    - id: "1111"
+      name: "Cineplexx Delta City"
+      maps_url: "https://maps.app.goo.gl/QvWgCswLGWjkJDLC8"
+      url: "https://www.cineplexx.rs/bioskop/delta-city/"
+    - id: "1113"
+      name: "Cineplexx Ušće"
+      maps_url: "https://maps.app.goo.gl/E4f2i4qEvCUnubJk9"
+      url: "https://www.cineplexx.rs/bioskop/novi-beograd/"
+    - id: "1115"
+      name: "Cineplexx Big Beograd"
+      maps_url: "https://maps.app.goo.gl/nNMo6gx6dXMdNWtW6"
+      url: "https://www.cineplexx.rs/bioskop/big-beograd/"
+    - id: "1118"
+      name: "Cineplexx Beo Shopping Center"
+      maps_url: "https://maps.app.goo.gl/AHssrAqyMuJPveEM6"
+      url: "https://www.cineplexx.rs/bioskop/beo-shopping-center/"
+    - id: "1119"
+      name: "Cineplexx Galerija"
+      maps_url: "https://maps.app.goo.gl/dN1FbzSsWBs4oWTV7"
+      url: "https://www.cineplexx.rs/bioskop/galerija/"
+
+  tuckwood:
+    - name: "Tuckwood Cineplex"
+      maps_url: "https://maps.app.goo.gl/hjDGQaNsJfeAGxQS9"
+      url: "https://www.tuck.rs"
+      description: "Самый старый кинотеатр в белграде"
+
+  cinegrand:
+    - name: "CineGrand MCF"
+      maps_url: "https://maps.app.goo.gl/b2PQuZ77mZDBmQSMA"
+      url: "https://cinegrand-mcf.rs"
+      location_id: 1
+      description: "хз"
+
+  cinestar:
+    - name: "Concept Cinema Ada Mall"
+      maps_url: "https://maps.app.goo.gl/bCUetrxSm5Cgtwrq8"
+      url: "https://cinestarcinemas.rs"
+      slug: "beograd-concept-cinema-ada-mall"
+      description: "хз"
+
+  roda:
+    - name: "Roda Cineplex"
+      maps_url: "https://maps.app.goo.gl/SRE3UhnHdUEve6Vy7"
+      url: "http://www.rodacineplex.com"
+      description: "хз"
+
+  mts_dvorana:
+    - name: "MTS Dvorana"
+      maps_url: "https://maps.app.goo.gl/jpo7wBbwYowVYxiR7"
+      url: "https://www.mtsdvorana.rs"
+      description: "хз"

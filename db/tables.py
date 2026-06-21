@@ -1,0 +1,10 @@
+class Tables:
+    MESSAGES              = 'messages'
+    FAVORITES             = 'favorites'
+    HIDDEN_EVENTS         = 'hidden_events'
+    USER_STATS            = 'user_stats'
+    CONVERSATIONS         = 'conversations'
+    CONVERSATION_MESSAGES = 'conversation_messages'
+    SCHEDULED_ALERTS      = 'scheduled_alerts'
+    CINEMA_EVENTS         = 'cinema_events'
+    CINEMA_DESCRIPTIONS   = 'cinema_descriptions'

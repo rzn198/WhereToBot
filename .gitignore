@@ -1,0 +1,38 @@
+# Секреты
+.env
+.env.local
+.env.local1
+.env.example1
+
+# Python
+venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+
+# Данные
+backups/
+logs/
+session/
+
+# PyCharm
+.idea/
+
+# OS
+Thumbs.db
+desktop.ini
+# Virtual environment
+.venv/
+
+# Output files
+outputs/
+
+# Local DB exports
+*.json
+*.sql~
+
+# Code review artifacts
+code_review_dump.txt
+migrate_production.py

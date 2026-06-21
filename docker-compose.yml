@@ -1,0 +1,52 @@
+services:
+  bot:
+    build: .
+    command: python -m bot.main
+    restart: always
+    env_file: .env
+    volumes:
+      - logs:/app/logs
+    depends_on:
+      db:
+        condition: service_healthy
+
+  collector:
+    build: .
+    command: python -m collector.main
+    restart: always
+    env_file: .env
+    volumes:
+      - logs:/app/logs
+      - session:/app/session
+    depends_on:
+      db:
+        condition: service_healthy
+
+  cinema_collector:
+    build: .
+    command: python -m cinema_collector.main
+    restart: always
+    env_file: .env
+    volumes:
+      - logs:/app/logs
+    depends_on:
+      db:
+        condition: service_healthy
+
+  db:
+    image: postgres:16-alpine
+    restart: always
+    env_file: .env
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./schema.sql:/docker-entrypoint-initdb.d/schema.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $POSTGRES_USER -d $POSTGRES_DB"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  pgdata:
+  logs:
+  session:

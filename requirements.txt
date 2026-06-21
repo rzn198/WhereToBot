@@ -1,0 +1,27 @@
+# Telegram
+telethon==1.36.0
+python-telegram-bot[asyncio]==22.8
+
+# Database
+asyncpg==0.29.0
+
+# Config
+python-dotenv==1.0.1
+pyyaml==6.0.2
+
+# Scheduling
+apscheduler==3.10.4
+
+# Logging
+loguru==0.7.2
+
+# Web (healthcheck endpoint)
+aiohttp==3.10.5
+
+# Testing
+pytest==8.3.3
+pytest-asyncio==0.24.0
+requests>=2.34.0
+beautifulsoup4>=4.14.0
+
+httpx

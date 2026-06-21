@@ -1,0 +1,53 @@
+scheduler:
+  parse_interval_minutes: 480
+  cleanup_interval_hours: 24
+  storage_check_interval_hours: 1
+  disk_check_interval_hours: 1
+  push_alert_time: "09:00"
+
+cleanup:
+  event_cleanup_days: 14
+  favorites_cleanup_days: 14
+  no_date_cleanup_days: 90
+
+monitoring:
+  file_id_error_threshold: 10
+  file_id_error_window_seconds: 3600
+  disk_free_threshold_pct: 20
+
+feature_flags:
+  show_source_button: false
+  show_contact_button: true
+
+alerts:
+  enabled: true
+  time: "09:00"
+  message: "Сегодня у вас события из избранного:"
+  send_delay_seconds: 0.04
+  delete_after_hours: 23
+
+photo:
+  enabled: true
+  max_size_bytes: 10485760
+  rate_limit_seconds: 1
+  caption_max_length: 1024
+  truncate_limit: 4096
+
+ui:
+  preview_chars: 400
+  menu_photo_file_id: "AgACAgIAAxkBAAEpzcJqGW98fiwpQcCwDjwWnuO9ncf-cgACnxprGwM-yEg0mA17sy6jJwEAAwIAA3MAAzsE"
+  cinema_menu_photo_file_id: "AgACAgIAAxkBAAEpzcJqGW98fiwpQcCwDjwWnuO9ncf-cgACnxprGwM-yEg0mA17sy6jJwEAAwIAA3MAAzsE"
+
+deduplication:
+  flag_threshold: 0.7
+
+cinema_collector:
+  parse_interval_hours: 6
+
+Menu text:
+  "Афиша белграда. Все события в одном месте!"
+
+channels:
+  custom:
+    - name: "@zarko_tusic"
+      parser: "zarko_tusic"
