@@ -16,7 +16,6 @@ async def edit_or_send(
     disable_link_preview: bool = False,
     user_id: int | None = None,
 ) -> None:
-
     effective_user_id = user_id or context.user_data.get('user_id')
 
     use_photo = bool(photo and len(text) <= CAPTION_LIMIT)
@@ -113,15 +112,27 @@ async def edit_or_send(
 
     if use_photo:
         logger.debug(f"MESSENGER_SEND | type=photo | chat_id={chat_id}")
-        sent = await context.bot.send_photo(
-            chat_id=chat_id,
-            photo=photo,
-            caption=text,
-            caption_entities=entities if entities else None,
-            reply_markup=keyboard,
-            parse_mode=effective_parse_mode,
-        )
-        context.user_data['message_type'] = 'photo'
+        try:
+            sent = await context.bot.send_photo(
+                chat_id=chat_id,
+                photo=photo,
+                caption=text,
+                caption_entities=entities if entities else None,
+                reply_markup=keyboard,
+                parse_mode=effective_parse_mode,
+            )
+            context.user_data['message_type'] = 'photo'
+        except BadRequest as e:
+            logger.warning(f"MESSENGER_PHOTO_INVALID | {e} | photo={photo!r}")
+            sent = await context.bot.send_message(
+                chat_id=chat_id,
+                text=text,
+                entities=entities,
+                reply_markup=keyboard,
+                parse_mode=effective_parse_mode,
+                link_preview_options=link_preview,
+            )
+            context.user_data['message_type'] = 'text'
     else:
         logger.debug(f"MESSENGER_SEND | type=text | chat_id={chat_id}")
         sent = await context.bot.send_message(
