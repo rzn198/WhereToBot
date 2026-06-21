@@ -3,7 +3,6 @@ import re
 from datetime import datetime, date, timedelta
 from zoneinfo import ZoneInfo
 import json
-import calendar
 from datetime import timezone
 from db.cleanup import run_cleanup
 from loguru import logger
@@ -12,15 +11,17 @@ from telegram.error import TelegramError
 from telegram.ext import ContextTypes
 from shared.config import config
 from db.tables import Tables
+from shared.constants import (
+    ALERT_PREVIEW_LENGTH,
+    EVENT_PREVIEW_LENGTH,
+    EVENT_LIST_PREVIEW_LENGTH,
+)
 from bot.handlers.contact import _require_admin, _edit_contact_window, escape_md
+from bot.handlers.calendar import build_calendar, MONTHS_RU
 
 
 BELGRADE_TZ = ZoneInfo('Europe/Belgrade')
 UTC_TZ = ZoneInfo('UTC')
-MONTHS_RU = [
-    '', 'Январь', 'Февраль', 'Март', 'Апрель', 'Май', 'Июнь',
-    'Июль', 'Август', 'Сентябрь', 'Октябрь', 'Ноябрь', 'Декабрь'
-]
 
 def _admin_back_button() -> list:
     return [InlineKeyboardButton('◀️ В админку', callback_data='admin_panel:main')]
@@ -222,7 +223,7 @@ async def _show_admin_hidden_calendar(
     dates_with_events = set(row['dates'] or [])
     max_date = row['max_date'] if row and row['max_date'] else date.today()
 
-    keyboard = _build_calendar(
+    keyboard = build_calendar(
         year=year,
         month=month,
         dates_with_events=dates_with_events,
@@ -346,7 +347,7 @@ async def _show_admin_hidden_event(
     text = (
         f"📅 {row['date']}\n"
         f"Статус: {status}\n\n"
-        f"{escape_md(row['text'][:300])}"
+        f"{escape_md(row['text'][:EVENT_LIST_PREVIEW_LENGTH])}"
     )
 
     hide_show_btn = (
@@ -574,7 +575,7 @@ async def _show_alert_confirm(
         menu_message_id=menu_message_id,
         text=(
             "⚠️ *Подтвердить отправку алерта?*\n\n"
-            f"Текст: {escape_md(alert_text[:200])}\n\n"
+            f"Текст: {escape_md(alert_text[:ALERT_PREVIEW_LENGTH])}\n\n"
             f"Время: {time_str}"
         ),
         keyboard=keyboard,
@@ -698,7 +699,7 @@ async def handle_admin_new_event_confirm(
         menu_message_id=menu_message_id,
         text=(
             "⚠️ *Сохранить событие в БД?*\n\n"
-            f"Текст: {escape_md(event_text[:200])}\n\n"
+            f"Текст: {escape_md(event_text[:EVENT_PREVIEW_LENGTH])}\n\n"
             f"Дата: {event_date}"
         ),
         keyboard=keyboard,
@@ -724,6 +725,10 @@ async def handle_admin_new_event_save(
 
     published_at = datetime.now(timezone.utc)
 
+    # Уникальный id для ручных записей: отрицательный timestamp в миллисекундах.
+    # Отрицательный — чтобы не пересекаться с настоящими Telegram message ID
+    # (всегда положительные). Раньше тут был фиксированный id=0, что нарушало
+    # UNIQUE (id, position) constraint и не позволяло создать второе ручное событие.
     manual_id = -int(datetime.now(timezone.utc).timestamp() * 1000)
 
     await pool.execute(f"""
@@ -875,7 +880,7 @@ async def _show_new_event_confirm(
 
     text = (
         "⚠️ *Сохранить событие в БД?*\n\n"
-        f"Текст: {escape_md(event_text[:200])}\n\n"
+        f"Текст: {escape_md(event_text[:EVENT_PREVIEW_LENGTH])}\n\n"
         f"Дата: {event_date}"
     )
 
@@ -918,7 +923,7 @@ async def _show_alert_time_choice(
                 message_id=menu_message_id,
                 text=(
                     f"📢 *Алерт готов:*\n\n"
-                    f"{escape_md(alert_text[:200])}\n\n"
+                    f"{escape_md(alert_text[:ALERT_PREVIEW_LENGTH])}\n\n"
                     f"Когда отправить?"
                 ),
                 reply_markup=keyboard,
@@ -931,7 +936,7 @@ async def _show_alert_time_choice(
     sent = await update.message.reply_text(
         text=(
             f"📢 *Алерт готов:*\n\n"
-            f"{escape_md(alert_text[:200])}\n\n"
+            f"{escape_md(alert_text[:ALERT_PREVIEW_LENGTH])}\n\n"
             f"Когда отправить?"
         ),
         reply_markup=keyboard,
@@ -976,7 +981,7 @@ async def _show_alert_event_picker(
     text = (
         f"📋 *Выберите событие:*\n\n"
         f"📅 {row['date']}\n\n"
-        f"{escape_md(row['text'][:300])}"
+        f"{escape_md(row['text'][:EVENT_LIST_PREVIEW_LENGTH])}"
     )
 
     if menu_message_id:
@@ -1037,93 +1042,6 @@ async def handle_admin_alert_pick_nav(
     await _show_alert_event_picker(update, context, pool)
 
 
-async def handle_calendar(
-    update: Update,
-    context: ContextTypes.DEFAULT_TYPE,
-) -> None:
-    query = update.callback_query
-    await query.answer()
-
-    pool = context.bot_data.get('pool')
-    today = date.today()
-    context.user_data['calendar_year'] = today.year
-    context.user_data['calendar_month'] = today.month
-
-    await _show_calendar(update, context, pool)
-
-
-async def handle_calendar_nav(
-    update: Update,
-    context: ContextTypes.DEFAULT_TYPE,
-) -> None:
-    query = update.callback_query
-    await query.answer()
-
-    pool = context.bot_data.get('pool')
-    parts = query.data.split(':')
-    direction = parts[1]
-
-    year = context.user_data.get('calendar_year', date.today().year)
-    month = context.user_data.get('calendar_month', date.today().month)
-
-    if direction == 'prev':
-        month -= 1
-        if month < 1:
-            month = 12
-            year -= 1
-    elif direction == 'next':
-        month += 1
-        if month > 12:
-            month = 1
-            year += 1
-
-    context.user_data['calendar_year'] = year
-    context.user_data['calendar_month'] = month
-
-    await _show_calendar(update, context, pool)
-
-
-async def _show_calendar(
-    update: Update,
-    context: ContextTypes.DEFAULT_TYPE,
-    pool,
-) -> None:
-    chat_id = update.effective_chat.id
-    menu_message_id = context.user_data.get('menu_message_id')
-
-    year = context.user_data.get('calendar_year', date.today().year)
-    month = context.user_data.get('calendar_month', date.today().month)
-
-    row = await pool.fetchrow(f"""
-            SELECT
-                array_agg(DISTINCT date) as dates,
-                MAX(date) as max_date
-            FROM {Tables.MESSAGES}
-            WHERE date IS NOT NULL
-            AND date >= CURRENT_DATE
-            AND hidden_by_admin = FALSE
-        """)
-    dates_with_events = set(row['dates'] or [])
-    max_date = row['max_date'] if row and row['max_date'] else date.today()
-
-    keyboard = _build_calendar(
-        year=year,
-        month=month,
-        dates_with_events=dates_with_events,
-        max_date=max_date,
-        callback_prefix='calendar_date',
-        nav_prefix='calendar_nav',
-    )
-    keyboard.append([InlineKeyboardButton('🏠 В меню', callback_data='nav:menu')])
-
-    await _edit_contact_window(
-        context=context,
-        chat_id=chat_id,
-        menu_message_id=menu_message_id,
-        text=f"📅 *Выберите дату:*\n\n{MONTHS_RU[month]} {year}",
-        keyboard=InlineKeyboardMarkup(keyboard),
-    )
-
 def _parse_date_input(text: str):
     from datetime import date
     m = re.match(r'^(\d{2})\.(\d{2})\.(\d{4})$', text.strip())
@@ -1144,60 +1062,3 @@ def _parse_time_input(text: str):
     if 0 <= hour <= 23 and 0 <= minute <= 59:
         return (hour, minute)
     return None
-
-def _build_calendar(
-    year: int,
-    month: int,
-    dates_with_events: set,
-    max_date: date,
-    callback_prefix: str,
-    nav_prefix: str,
-) -> list:
-
-    today = date.today()
-    cal = calendar.monthcalendar(year, month)
-
-    header = [InlineKeyboardButton(d, callback_data='calendar:ignore')
-              for d in ['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс']]
-
-    rows = [header]
-
-    for week in cal:
-        row = []
-        for day in week:
-            if day == 0:
-                row.append(InlineKeyboardButton(' ', callback_data='calendar:ignore'))
-                continue
-
-            current_date = date(year, month, day)
-
-            if current_date < today or current_date > max_date:
-                row.append(InlineKeyboardButton('·', callback_data='calendar:ignore'))
-            elif current_date in dates_with_events:
-                date_str = current_date.isoformat()
-                row.append(InlineKeyboardButton(
-                    str(day),
-                    callback_data=f'{callback_prefix}:{date_str}'
-                ))
-            else:
-                row.append(InlineKeyboardButton('·', callback_data='calendar:ignore'))
-
-        rows.append(row)
-
-    current_month = date.today()
-    prev_disabled = (year == current_month.year and month == current_month.month)
-    next_disabled = (year == max_date.year and month == max_date.month)
-
-    nav = [
-        InlineKeyboardButton(
-            '◀️' if not prev_disabled else ' ',
-            callback_data=f'{nav_prefix}:prev' if not prev_disabled else 'calendar:ignore'
-        ),
-        InlineKeyboardButton(
-            '▶️' if not next_disabled else ' ',
-            callback_data=f'{nav_prefix}:next' if not next_disabled else 'calendar:ignore'
-        ),
-    ]
-    rows.append(nav)
-
-    return rows

@@ -1,3 +1,6 @@
+# bot/handlers/cinema.py
+# UI киноафиши
+
 from datetime import date, timedelta, date as date_type
 from datetime import datetime
 from shared.config import config
@@ -466,7 +469,7 @@ async def _show_cinema_calendar(
     context: ContextTypes.DEFAULT_TYPE,
     pool,
 ) -> None:
-    from bot.handlers.admin_panel import _build_calendar, MONTHS_RU
+    from bot.handlers.calendar import build_calendar, MONTHS_RU
 
     chat_id = update.effective_chat.id
 
@@ -484,7 +487,7 @@ async def _show_cinema_calendar(
     dates_with_events = set(row['dates'] or [])
     max_date = row['max_date'] if row and row['max_date'] else date.today()
 
-    keyboard = _build_calendar(
+    keyboard = build_calendar(
         year=year,
         month=month,
         dates_with_events=dates_with_events,

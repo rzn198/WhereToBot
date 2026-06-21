@@ -76,6 +76,8 @@ from bot.handlers.admin_panel import (
     handle_admin_new_event_confirm,
     handle_admin_new_event_save,
     handle_admin_text_input,
+)
+from bot.handlers.calendar import (
     handle_calendar,
     handle_calendar_nav,
 )
@@ -172,7 +174,7 @@ async def main():
     app.add_handler(TypeHandler(Update, _session_middleware), group=-1)
 
     # ----------------------------------------------------------
-    # handlers — keep the priority!
+    # Регистрация handlers — порядок важен
     # ----------------------------------------------------------
 
     app.add_handler(CommandHandler('start', handle_start))
