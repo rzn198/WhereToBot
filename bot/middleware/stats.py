@@ -1,7 +1,6 @@
 import asyncpg
 from loguru import logger
 from telegram import Update
-from telegram.ext import ContextTypes
 
 from db.tables import Tables
 

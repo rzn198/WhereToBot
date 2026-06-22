@@ -1,5 +1,5 @@
 import re
-from datetime import datetime, date
+from datetime import datetime
 from loguru import logger
 from bs4 import BeautifulSoup
 from zoneinfo import ZoneInfo

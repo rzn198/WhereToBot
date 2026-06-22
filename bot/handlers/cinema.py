@@ -3,12 +3,9 @@
 
 from datetime import date, timedelta, date as date_type
 from datetime import datetime
-from shared.config import config
-from loguru import logger
 from zoneinfo import ZoneInfo
 from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton
 from telegram.ext import ContextTypes
-from telegram.error import TelegramError
 
 from db.tables import Tables
 from bot.handlers.contact import escape_md

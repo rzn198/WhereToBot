@@ -1,5 +1,5 @@
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime
 
 import requests
@@ -53,5 +53,6 @@ class BaseScraper:
 
     source: str = ''
 
-    def fetch(self, target_date: str) -> list[CinemaEvent]:
+    def fetch(self) -> list[CinemaEvent]:
+        
         raise NotImplementedError

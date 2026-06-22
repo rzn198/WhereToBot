@@ -1,4 +1,3 @@
-import pytest
 from collector.entities.truncator import truncate_if_needed, EventText
 from collector.entities.utf16 import utf16_len
 

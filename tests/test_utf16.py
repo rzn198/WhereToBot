@@ -1,4 +1,3 @@
-import pytest
 from collector.entities.utf16 import utf16_len, utf16_slice, truncate_to_utf16
 
 

@@ -5,7 +5,6 @@ from telethon.tl.types import Message
 from collector.parsers.base import BaseParser, ParsedEvent
 from collector.date_parser.parser import parse_date
 from collector.entities.truncator import truncate_if_needed, EventText
-from shared.config import config
 
 
 class DefaultParser(BaseParser):

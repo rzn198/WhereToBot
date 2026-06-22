@@ -24,15 +24,14 @@ from db.connection import init_db_pool, close_db_pool
 from db.validators import validate_config_tables
 from bot.health import start_health_server
 from bot.scheduler import start_bot_scheduler
-from bot.middleware.session import restore_session, save_session
+from bot.middleware.session import restore_session
 from bot.middleware.locks import get_user_lock
 from bot.middleware.correlation import set_current_update_id
-from bot.handlers.start import handle_start, show_main_menu
+from bot.handlers.start import handle_start
 from bot.handlers.events import handle_filter
 from bot.handlers.navigation import handle_navigation
 from bot.handlers.favorites import handle_favorites
 from bot.handlers.hidden import handle_hide
-from bot.handlers.donate import handle_donate
 from bot.handlers.alert_dismiss import handle_alert_dismiss
 from bot.handlers.contact import (
     handle_contact_inline,

@@ -1,8 +1,6 @@
-import pytest
 from datetime import date
 from collector.date_parser.parser import parse_date
 from collector.date_parser.validators import is_valid_date
-from collector.date_parser.utils import parse_day_of_week, parse_relative_date
 
 PUBLISHED = date(2026, 5, 4)  # понедельник
 
