@@ -1,4 +1,3 @@
-import shutil
 import asyncpg
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from loguru import logger

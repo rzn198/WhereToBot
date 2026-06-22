@@ -7,7 +7,7 @@ from collector.parsers.base import BaseParser, ParsedEvent
 from collector.entities.utf16 import utf16_len
 from collector.entities.recalculator import recalc_entities
 from collector.entities.truncator import truncate_if_needed, EventText
-from collector.date_parser.parser import parse_date, MONTH_MAP
+from collector.date_parser.parser import MONTH_MAP
 
 
 _DAY_HEADER = re.compile(

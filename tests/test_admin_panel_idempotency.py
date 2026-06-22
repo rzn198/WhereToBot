@@ -1,4 +1,3 @@
-import json
 from datetime import date, datetime, timezone
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch

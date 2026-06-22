@@ -24,14 +24,14 @@ from db.connection import init_db_pool, close_db_pool
 from db.validators import validate_config_tables
 from bot.health import start_health_server
 from bot.scheduler import start_bot_scheduler
-from bot.middleware.session import restore_session, save_session
+from bot.middleware.session import restore_session
 from bot.middleware.locks import get_user_lock
-from bot.handlers.start import handle_start, show_main_menu
+from bot.middleware.correlation import set_current_update_id
+from bot.handlers.start import handle_start
 from bot.handlers.events import handle_filter
 from bot.handlers.navigation import handle_navigation
 from bot.handlers.favorites import handle_favorites
 from bot.handlers.hidden import handle_hide
-from bot.handlers.donate import handle_donate
 from bot.handlers.alert_dismiss import handle_alert_dismiss
 from bot.handlers.contact import (
     handle_contact_inline,
@@ -76,6 +76,8 @@ from bot.handlers.admin_panel import (
     handle_admin_new_event_confirm,
     handle_admin_new_event_save,
     handle_admin_text_input,
+)
+from bot.handlers.calendar import (
     handle_calendar,
     handle_calendar_nav,
 )
@@ -94,6 +96,8 @@ from bot.handlers.cinema import (
 
 
 async def _session_middleware(update: Update, context) -> None:
+    set_current_update_id(update.update_id)
+
     user_id = update.effective_user.id if update.effective_user else None
     if not user_id:
         return
@@ -170,10 +174,6 @@ async def main():
     bot_scheduler = start_bot_scheduler(app.bot, pool)
 
     app.add_handler(TypeHandler(Update, _session_middleware), group=-1)
-
-    # ----------------------------------------------------------
-    # handlers — keep the priority!
-    # ----------------------------------------------------------
 
     app.add_handler(CommandHandler('start', handle_start))
     app.add_handler(CommandHandler('cancel', handle_cancel))

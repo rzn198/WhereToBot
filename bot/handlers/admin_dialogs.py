@@ -3,7 +3,6 @@ from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton
 from telegram.ext import ContextTypes
 from telegram.error import TelegramError
 
-from shared.config import config
 from db.tables import Tables
 from bot.middleware.admin import admin_only
 from bot.handlers.contact import _require_admin, _edit_contact_window, escape_md

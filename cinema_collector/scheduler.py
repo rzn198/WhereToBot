@@ -1,4 +1,3 @@
-from datetime import date, timedelta
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from loguru import logger
 

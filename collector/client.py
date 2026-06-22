@@ -1,4 +1,3 @@
-import sys
 from pathlib import Path
 from loguru import logger
 from telethon import TelegramClient

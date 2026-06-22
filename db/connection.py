@@ -15,8 +15,8 @@ async def init_db_pool() -> asyncpg.Pool:
             database=db['name'],
             user=db['user'],
             password=db['password'],
-            min_size=2,
-            max_size=10,
+            min_size=5,
+            max_size=20,
             command_timeout=30,
         )
     except Exception as e:
