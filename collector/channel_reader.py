@@ -8,6 +8,9 @@ from telethon.errors import RPCError
 from telethon.tl.types import Message
 
 from collector.parsers.zarko_tusic import ZarkoTusicParser
+from collector.parsers.running_beg import RunningBegParser
+#from collector.categorizer import categorize
+from collector.categorizer_v2 import categorize
 from shared.config import config
 from db.tables import Tables
 from collector.parsers.base import ParsedEvent
@@ -17,6 +20,7 @@ from collector.parsers.default import DefaultParser
 PARSER_REGISTRY: dict[str, type] = {
     'default': DefaultParser,
     'zarko_tusic': ZarkoTusicParser,
+    'running_beg': RunningBegParser,
 }
 
 
@@ -75,9 +79,12 @@ async def fetch_new_messages(
                 except TelegramError:
                     channel_id = 0
 
+                event_types = categorize(event.text, channel, position=event.position)
+
                 result = await _save_event(
                     pool, message, channel, event,
                     channel_id=channel_id,
+                    event_types=event_types,
                 )
 
                 if not result:
@@ -122,14 +129,16 @@ async def _save_event(
     channel: str,
     event: ParsedEvent,
     channel_id: int,
+    event_types: list[str] | None = None,
 ) -> bool:
     published_at = message.date.replace(tzinfo=timezone.utc)
 
     query = f"""
         INSERT INTO {Tables.MESSAGES} (
             id, position, channel_id, text, entities,
-            date, published_at, photo_file_id, storage_message_id
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+            date, published_at, photo_file_id, storage_message_id,
+            event_types
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
         ON CONFLICT (id, position) DO NOTHING
         RETURNING surrogate_id
     """
@@ -145,6 +154,7 @@ async def _save_event(
         published_at,
         event.photo_file_id,
         event.storage_message_id,
+        event_types or [],
     )
 
     return result is not None
