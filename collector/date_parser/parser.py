@@ -39,8 +39,11 @@ _P2_SHORT = re.compile(
 )
 
 _MONTHS_PATTERN = '|'.join(sorted(MONTH_MAP.keys(), key=len, reverse=True))
+
+_ORDINAL_SUFFIX = r'-?(?:го|ого|ое|е)?'
+
 _P3 = re.compile(
-    rf'(?<!\d)(\d{{1,2}})\s+({_MONTHS_PATTERN})(?:\s+(\d{{4}}))?',
+    rf'(?<!\d)(\d{{1,2}}){_ORDINAL_SUFFIX}\s+({_MONTHS_PATTERN})(?:\s+(\d{{4}}))?',
     re.IGNORECASE
 )
 
@@ -88,7 +91,7 @@ def parse_date(text: str, published_at: date) -> date | None:
     Иерархия приоритетов:
         1. Полный числовой:      4.05.2026
         2. Короткий числовой:    26.04 (без года)
-        3. Текстовый месяц:      4 мая 2026
+        3. Текстовый месяц:      4 мая 2026 (также "4-го мая", "1-ое мая")
         4. Английский обратный:  March 27
         5. День недели + дата:   Вс., 26.04
         6. День недели + месяц:  Friday, March 27

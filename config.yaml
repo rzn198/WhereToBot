@@ -51,3 +51,5 @@ channels:
   custom:
     - name: "@zarko_tusic"
       parser: "zarko_tusic"
+    - name: "@runningbeg"
+      parser: "running_beg"

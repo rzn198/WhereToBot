@@ -8,3 +8,4 @@ class Tables:
     SCHEDULED_ALERTS      = 'scheduled_alerts'
     CINEMA_EVENTS         = 'cinema_events'
     CINEMA_DESCRIPTIONS   = 'cinema_descriptions'
+    EVENTS = 'events'
