@@ -44,6 +44,9 @@ deduplication:
 cinema_collector:
   parse_interval_hours: 6
 
+event_collector:
+  parse_interval_hours: 6
+
 Menu text:
   "Афиша белграда. Все события в одном месте!"
 
