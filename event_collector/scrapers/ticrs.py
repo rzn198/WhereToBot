@@ -49,6 +49,28 @@ MONTHS_EN = {
 
 _DATE_RE = re.compile(r"(\d{1,2})\s+(\w+),?\s+(\d{1,2}):(\d{2})")
 
+# Cloudflare Images (imagedelivery.net) кладёт формат параметром в хвост
+# пути: .../w=600,h=700,fit=cover,format=webp
+# Telegram не отображает webp по URL, поэтому принудительно приводим к jpeg.
+_CF_FORMAT_RE = re.compile(r"format=[a-z0-9]+", re.IGNORECASE)
+
+
+def _force_jpeg(url: str | None) -> str | None:
+    """
+    Приводит Cloudflare Images URL к JPEG для Telegram.
+    - есть format=... в хвосте -> заменяем на format=jpeg
+    - есть параметры трансформации (w=..,h=..) без format -> дописываем ,format=jpeg
+    - imagedelivery.net без параметров (или иной хост) -> оставляем как есть
+    """
+    if not url:
+        return url
+    if "format=" in url.lower():
+        return _CF_FORMAT_RE.sub("format=jpeg", url)
+    # imagedelivery.net с трансформациями, но без явного format
+    if "imagedelivery.net" in url and re.search(r"/(?:w|h|fit)=", url):
+        return url.rstrip("/") + ",format=jpeg"
+    return url
+
 
 class TicRsScraper(BaseScraper):
     source = 'ticrs'
@@ -229,12 +251,13 @@ class TicRsScraper(BaseScraper):
         return None
 
     def _parse_images(self, poster_urls) -> list[str]:
+        # приводим Cloudflare webp -> jpeg, иначе Telegram не отобразит
         if isinstance(poster_urls, dict):
             for key in ("2x", "1x", "original"):
                 if poster_urls.get(key):
-                    return [poster_urls[key]]
+                    return [_force_jpeg(poster_urls[key])]
         elif isinstance(poster_urls, str):
-            return [poster_urls]
+            return [_force_jpeg(poster_urls)]
         return []
 
     def _parse_price(self, formatted_price, url) -> list[dict]:

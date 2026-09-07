@@ -8,16 +8,19 @@
 #   3. каждое событие маппится сразу в EventItem
 #
 # Особенности:
-#   - мультиязычность translations: en > sr > ru, фолбэк на name
-#   - город приходит явно (location.city.name)
+#   - мультиязычность translations: ru > en > sr, фолбэк на name
+#   - город приходит явно (location.city.name); без country (location.city.
+#     country.code) событие пропускается — заодно отсекает онлайн/битые события
 #   - горизонт дат: сегодня .. +3 года, только status=scheduled
-#   - is_permanent неприменим (все события с датой) -> всегда False
+#   - постер: корневой image_cover; если пуст — картинка из translations
+#     (независимый поиск по языкам ru>en>sr); URL с расширением через
+#     filename_disk: /assets/{id}/{filename_disk}
 
 from __future__ import annotations
 
 import asyncio
 import json
-from datetime import datetime, timezone
+from datetime import datetime
 from zoneinfo import ZoneInfo
 
 import httpx
@@ -39,19 +42,41 @@ YEARS_AHEAD = 3
 
 # Поля запроса к Directus (slug НЕ запрашиваем явно — вызывает 403,
 # но приходит в ответе автоматически).
+# image_cover.filename_disk — для URL с расширением (.jpg/.png).
+# translations.image_cover.* — fallback-постер, если корневой пуст.
 API_FIELDS = ",".join([
     "id", "name", "start_date", "status", "base_currency", "duration",
     "visit_price", "price_type", "for_adults", "book_link",
-    "image_cover.id",
+    "image_cover.id", "image_cover.filename_disk",
     "location.name", "location.address_text",
     "location.city.name", "location.city.country.code",
     "event_type.name",
     "translations.event_name", "translations.event_description",
     "translations.language",
+    "translations.image_cover.id", "translations.image_cover.filename_disk",
     "description",
 ])
 
 LANG_PRIORITY = ["ru", "en", "sr"]
+
+
+def _asset_url(cover: dict | None) -> str | None:
+    """
+    Строит URL постера из объекта directus_files.
+    Формат: /assets/{id}/{filename_disk} — даёт окончание .jpg/.png.
+    Фолбэк на /assets/{id}, если filename_disk отсутствует.
+    Возвращает None, если нет id.
+    """
+    if not cover:
+        return None
+    cover_id = cover.get("id")
+    if not cover_id:
+        return None
+    filename = cover.get("filename_disk")
+    if filename:
+        return f"{ASSETS_BASE}/{cover_id}/{filename}"
+    return f"{ASSETS_BASE}/{cover_id}"
+
 
 class PolakoScraper(BaseScraper):
     source = 'polako'
@@ -145,7 +170,7 @@ class PolakoScraper(BaseScraper):
             return None
         source_url = f"{SITE_BASE}/{slug}"
 
-        # title/description: перевод en>sr>ru, фолбэк name
+        # title/description: перевод ru>en>sr, фолбэк name
         tr = self._pick_translation(ev.get("translations"))
         title = (tr or {}).get("event_name") or ev.get("name")
         if not title:
@@ -158,16 +183,14 @@ class PolakoScraper(BaseScraper):
         starts_at = parse_datetime(ev.get("start_date"))
         if not starts_at:
             return None
-        ends_at = self._calc_end(starts_at, ev.get("duration"))
 
         loc = ev.get("location") or {}
         city_obj = (loc.get("city") or {})
         country = ((city_obj.get("country") or {}).get("code"))
         if not country:
-            return None   # как в оригинале: без страны пропускаем
+            return None   # без страны пропускаем (отсекает онлайн/битые события)
 
         venue = loc.get("name")
-        address = loc.get("address_text")
         city = city_obj.get("name")
 
         # категоризация как в messages: title + description, мульти-лейбл
@@ -176,17 +199,11 @@ class PolakoScraper(BaseScraper):
             cat_text = f"{title} {description}"
         event_types = categorize(cat_text, channel='polako', position=0)
 
+        # постер: корневой image_cover; если пуст — fallback из translations
         images = []
-        cover = ev.get("image_cover") or {}
-        if cover.get("id"):
-            images.append(f"{ASSETS_BASE}/{cover['id']}")
-
-        tickets = [{
-            "price": ev.get("visit_price") or "0.00",
-            "currency": ev.get("base_currency") or "RSD",
-            "type": ev.get("price_type") or "regular",
-            "url": ev.get("book_link") or source_url,
-        }]
+        cover_url = self._pick_cover(ev)
+        if cover_url:
+            images.append(cover_url)
 
         return EventItem(
             source=self.source,
@@ -211,11 +228,37 @@ class PolakoScraper(BaseScraper):
                     return t
         return translations[0]
 
-    def _calc_end(self, start: datetime, duration_min) -> datetime | None:
-        if not duration_min:
-            return None
-        try:
-            from datetime import timedelta
-            return start + timedelta(minutes=int(duration_min))
-        except (TypeError, ValueError):
-            return None
+    def _pick_cover(self, ev: dict) -> str | None:
+        """
+        Возвращает URL постера.
+        Приоритет:
+          1. корневой image_cover события;
+          2. если пуст — image_cover из translations, независимый поиск
+             по языкам ru>en>sr (первый непустой), image_cover_origin
+             не учитываем;
+          3. подстраховка — любой перевод с картинкой вне приоритета.
+        Возвращает None, если картинки нет нигде.
+        """
+        # 1. корневой постер
+        root_url = _asset_url(ev.get("image_cover"))
+        if root_url:
+            return root_url
+
+        translations = ev.get("translations") or []
+
+        # 2. fallback: перебор translations по приоритету языка
+        for lang in LANG_PRIORITY:
+            for t in translations:
+                if t.get("language") != lang:
+                    continue
+                url = _asset_url(t.get("image_cover"))
+                if url:
+                    return url
+
+        # 3. подстраховка: любой перевод с картинкой вне приоритета
+        for t in translations:
+            url = _asset_url(t.get("image_cover"))
+            if url:
+                return url
+
+        return None
