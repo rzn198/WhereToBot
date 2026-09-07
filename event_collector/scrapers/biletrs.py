@@ -1,11 +1,3 @@
-# event_collector/scrapers/biletrs.py
-# Порт Node (plugins/biletrs) на Python.
-# Двухфазный:
-#   Фаза 1: bilet.rs/events?tag={tag} -> JSON-LD ItemList -> id событий
-#   Фаза 2: app.bilet.rs/api/v1/public/shows/{id} -> detail
-# Категория: из detail-поля `tags` (мульти-лейбл), маппинг серб.тег -> рус.категория.
-# Описание: Draft.js -> plain text.
-
 from __future__ import annotations
 
 import asyncio
@@ -28,11 +20,10 @@ TAG_DELAY = 1.0
 
 UA = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
 
-# 8 тегов biletrs (из Node RootHandler)
+
 TAGS = ["Koncerti", "Festivali", "Izložbe", "Žurke",
         "Edukacije", "Kursevi", "Seminari", "Webinari"]
 
-# Серб. тег -> русская категория (categorizers_v2.yaml)
 TAG_TO_CATEGORY = {
     "Koncerti":  "Концерты",
     "Festivali": "Фестивали",
@@ -60,11 +51,9 @@ class BiletRsScraper(BaseScraper):
         logger.info("BILETRS_FETCH | start")
 
         async with httpx.AsyncClient(timeout=TIMEOUT, headers=UA) as client:
-            # Фаза 1: собираем id из всех тегов (дедуп)
             event_ids = await self._collect_ids(client)
             logger.info(f"BILETRS_IDS | unique={len(event_ids)}")
 
-            # Фаза 2: detail по каждому id
             items: list[EventItem] = []
             now = datetime.now(timezone.utc)
             for eid in event_ids:
@@ -80,7 +69,6 @@ class BiletRsScraper(BaseScraper):
         return items
 
     async def _collect_ids(self, client) -> list[str]:
-        """Обходит теги, парсит JSON-LD ItemList, собирает уникальные id."""
         seen: set[str] = set()
         ordered: list[str] = []
         for tag in TAGS:
@@ -114,7 +102,6 @@ class BiletRsScraper(BaseScraper):
                 if eid not in seen:
                     seen.add(eid)
                     ordered.append(eid)
-                    # публичный url: домен app.bilet.rs -> bilet.rs, slug сохраняем
                     public_url = url.replace("https://app.bilet.rs", "https://bilet.rs")
                     self._url_by_id[eid] = public_url
                     cnt += 1
@@ -136,7 +123,6 @@ class BiletRsScraper(BaseScraper):
         starts_at = parse_datetime(d.get("showDate"))
         if not starts_at:
             return None
-        # отсекаем прошедшие
         if starts_at < now:
             logger.debug(f"BILETRS_PAST | id={eid} | {title} | {starts_at.date()}")
             return None
@@ -144,22 +130,16 @@ class BiletRsScraper(BaseScraper):
         ends_at = parse_datetime(d.get("endDate"))
         description = draftjs_to_text(d.get("description"))
         venue = d.get("manualLocation")
-        # город вшит в строку места ("Klub X, Niš"); ищем известный,
-        # не нашли -> Belgrade (biletrs преимущественно белградский)
         city = find_city_in_text(venue, default="Belgrade")
         currency = d.get("currency") or "RSD"
 
-        # категории из tags (мульти-лейбл, маппинг на русские)
         event_types = self._map_tags(d.get("tags"))
 
-        images = []
-        if d.get("eventImage"):
-            images.append(d["eventImage"])
+        images = d.get("eventImage") or None   # одна ссылка или None
 
         tickets = self._build_tickets(d.get("ticketTypes"), currency, eid)
         is_soldout = (d.get("status") == "COMPLETED")
 
-        # публичный url со slug из листинга; фолбэк — без slug (сайт редиректит)
         source_url = self._url_by_id.get(eid, f"https://bilet.rs/events/{eid}")
 
         return EventItem(
@@ -177,7 +157,6 @@ class BiletRsScraper(BaseScraper):
         )
 
     def _map_tags(self, tags) -> list[str]:
-        """tags: [{'id':8,'text':'Koncerti'},...] -> ['Концерты',...] (дедуп)."""
         if not tags or not isinstance(tags, list):
             return []
         result: list[str] = []

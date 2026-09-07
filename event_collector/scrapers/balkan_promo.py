@@ -1,11 +1,3 @@
-# event_collector/scrapers/balkan_promo.py
-# Порт Node (plugins/balkan-promo) на Python.
-# HTML Flexbe CMS, два прохода:
-#   Root:  homepage -> .flexbe-card -> URL событий
-#   Event: страница -> таблица расписания [role=row]/[role=cell]
-# Категория: всегда ['Концерты'] (balkan-promo только концерты).
-# Дата: "11 Сентября"/"25 April" (RU+EN месяцы), без года -> тек./след. год.
-
 from __future__ import annotations
 
 import asyncio
@@ -27,10 +19,8 @@ TIMEOUT = 20
 EVENT_DELAY = 0.3
 UA = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
 
-# balkan-promo — только концерты
 FIXED_CATEGORY = ["Концерты"]
 
-# Маркеры служебного текста (не описание) — инструкции про билеты/одежду/крипту
 _SERVICE_MARKERS = (
     "билеты придут", "скачать сразу после оплаты", "подберите одежду",
     "минимальное количество ценных", "минимум ценных вещей",
@@ -105,17 +95,12 @@ class BalkanPromoScraper(BaseScraper):
         r.raise_for_status()
         t = HTMLParser(r.text)
 
-        # title из <title>: два шаблона
-        #   RU: "Афиша выступлений X на Балканах" -> "X"
-        #   EN: "Poster of X performances in the Balkans" -> "X"
         tt = t.css_first("head title")
         title = None
         if tt:
             raw = tt.text(strip=True)
-            # русский шаблон
             title = re.sub(r"^Афиша выступлений\s+", "", raw)
             title = re.sub(r"\s+на Балканах$", "", title)
-            # английский шаблон
             title = re.sub(r"^Poster of\s+", "", title, flags=re.I)
             title = re.sub(r"\s+performances?\s+in\s+the\s+Balkans$", "", title, flags=re.I)
             title = title.strip() or None
@@ -203,7 +188,6 @@ class BalkanPromoScraper(BaseScraper):
             dt = datetime(year, month, day, 20, 0, tzinfo=BELGRADE_TZ)
         except ValueError:
             return None
-        # без года: если дата уже прошла — следующий год
         if dt < now:
             try:
                 dt = datetime(year + 1, month, day, 20, 0, tzinfo=BELGRADE_TZ)
@@ -212,10 +196,6 @@ class BalkanPromoScraper(BaseScraper):
         return dt
 
     def _extract_description(self, tree) -> str | None:
-        """
-        Первый содержательный текстовый блок, не являющийся служебным
-        (инструкции про билеты/одежду/крипту).
-        """
         for n in tree.css('.element-text, [class*="text-holder"]'):
             txt = n.text(strip=True)
             if len(txt) < 80:
@@ -226,15 +206,15 @@ class BalkanPromoScraper(BaseScraper):
             return txt
         return None
 
-    def _extract_image(self, tree, url: str) -> list[str]:
+    def _extract_image(self, tree, url: str) -> str | None:
         bg = tree.css_first('div.component-bg[data-img-id]')
         if bg:
             img_id = bg.attributes.get("data-img-id")
             img_ext = bg.attributes.get("data-img-ext")
             if img_id and img_ext:
-                return [f"{BASE}/img/{img_id}.{img_ext}"]
+                return f"{BASE}/img/{img_id}.{img_ext}"
         og = tree.css_first('meta[property="og:image"]')
         if og and og.attributes.get("content"):
             c = og.attributes["content"]
-            return [c if c.startswith("http") else f"{BASE}{c}"]
-        return []
+            return c if c.startswith("http") else f"{BASE}{c}"
+        return None

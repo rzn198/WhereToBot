@@ -1,11 +1,3 @@
-# event_collector/scrapers/ticrs.py
-# Порт Node (plugins/ticrs) на Python. Только Belgrade.
-# Двухфазный:
-#   Фаза 1: tic.rs/en/belgrade?page=N (XHR) -> JSON {data, pagination} -> id
-#   Фаза 2: tic.rs/api/event/{id} -> русские name/description, geo, place
-# Категория: categorizer_v2 по русскому title+description (как polako).
-# ticrs — единственный источник с координатами (geo.lat/lon).
-
 from __future__ import annotations
 
 import asyncio
@@ -22,9 +14,6 @@ from collector.categorizer_v2 import categorize
 
 BELGRADE_TZ = ZoneInfo('Europe/Belgrade')
 CITY = "belgrade"
-# ВАЖНО: /ru/belgrade делает 301-редирект на /ru/belgrad (без 'e'),
-# и при редиректе теряется ?page=N — пагинация ломается (всегда стр.1).
-# Ходим сразу на конечный /ru/belgrad, тогда page сохраняется.
 LISTING = "https://tic.rs/ru/belgrad"
 DETAIL = "https://tic.rs/api/event/{id}"
 TIMEOUT = 20
@@ -37,7 +26,6 @@ XHR = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
 }
 
-# русские месяцы для date_text ("13 августа, 17:30")
 MONTHS_RU = {
     "января": 1, "февраля": 2, "марта": 3, "апреля": 4, "мая": 5, "июня": 6,
     "июля": 7, "августа": 8, "сентября": 9, "октября": 10, "ноября": 11, "декабря": 12,
@@ -49,24 +37,15 @@ MONTHS_EN = {
 
 _DATE_RE = re.compile(r"(\d{1,2})\s+(\w+),?\s+(\d{1,2}):(\d{2})")
 
-# Cloudflare Images (imagedelivery.net) кладёт формат параметром в хвост
-# пути: .../w=600,h=700,fit=cover,format=webp
-# Telegram не отображает webp по URL, поэтому принудительно приводим к jpeg.
 _CF_FORMAT_RE = re.compile(r"format=[a-z0-9]+", re.IGNORECASE)
 
 
 def _force_jpeg(url: str | None) -> str | None:
-    """
-    Приводит Cloudflare Images URL к JPEG для Telegram.
-    - есть format=... в хвосте -> заменяем на format=jpeg
-    - есть параметры трансформации (w=..,h=..) без format -> дописываем ,format=jpeg
-    - imagedelivery.net без параметров (или иной хост) -> оставляем как есть
-    """
+
     if not url:
         return url
     if "format=" in url.lower():
         return _CF_FORMAT_RE.sub("format=jpeg", url)
-    # imagedelivery.net с трансформациями, но без явного format
     if "imagedelivery.net" in url and re.search(r"/(?:w|h|fit)=", url):
         return url.rstrip("/") + ",format=jpeg"
     return url
@@ -84,11 +63,9 @@ class TicRsScraper(BaseScraper):
 
         async with httpx.AsyncClient(timeout=TIMEOUT, headers=XHR,
                                      follow_redirects=True) as client:
-            # Фаза 1: собираем id из листинга Belgrade
             event_ids = await self._collect_ids(client)
             logger.info(f"TICRS_IDS | count={len(event_ids)}")
 
-            # Фаза 2: detail по каждому
             items: list[EventItem] = []
             for eid in event_ids:
                 try:
@@ -125,8 +102,6 @@ class TicRsScraper(BaseScraper):
             pag = d.get("pagination") or {}
             total_pages = pag.get("total_pages") or 1
             current = pag.get("current_page")
-            # защита: если API сбросил на стр.1 при запросе page>1 (редирект
-            # съел параметр) — прекращаем, чтобы не собирать одну страницу вечно.
             if current is not None and page > 1 and current != page:
                 logger.warning(
                     f"TICRS_PAGE_RESET | запросили page={page}, "
@@ -149,7 +124,6 @@ class TicRsScraper(BaseScraper):
         if not isinstance(obj, dict):
             return None
 
-        # русские name/description из detail
         title = (obj.get("name") or "").strip()
         if not title:
             return None
@@ -163,16 +137,14 @@ class TicRsScraper(BaseScraper):
             logger.debug(f"TICRS_PAST | {title} | {starts_at.date()}")
             return None
 
-        # venue из place
         venue = self._parse_place(obj)
 
-        # категоризация: русский title + description через categorizer_v2
         cat_text = title
         if description:
             cat_text = f"{title} {description}"
         event_types = categorize(cat_text, channel='ticrs', position=0)
 
-        images = self._parse_images(obj.get("poster_urls"))
+        images = self._parse_image(obj.get("poster_urls"))
         tickets = self._parse_price(obj.get("formatted_price"), obj.get("url"))
         source_url = obj.get("url") or f"https://tic.rs/ru/belgrade/events/{eid}"
 
@@ -191,7 +163,6 @@ class TicRsScraper(BaseScraper):
         )
 
     def _parse_date(self, date_text, calendar, now) -> datetime | None:
-        # приоритет: calendar (ISO с годом), фолбэк date_text ("13 августа, 17:30")
         if calendar:
             iso = None
             # реальная структура: [{'date_start': '2026-09-07T20:00:00+02:00', ...}]
@@ -225,7 +196,6 @@ class TicRsScraper(BaseScraper):
             dt = datetime(year, month, int(day), int(hour), int(minute), tzinfo=BELGRADE_TZ)
         except ValueError:
             return None
-        # без года: если прошло — следующий год
         if dt < now:
             try:
                 dt = datetime(year + 1, month, int(day), int(hour), int(minute), tzinfo=BELGRADE_TZ)
@@ -250,15 +220,14 @@ class TicRsScraper(BaseScraper):
             return place
         return None
 
-    def _parse_images(self, poster_urls) -> list[str]:
-        # приводим Cloudflare webp -> jpeg, иначе Telegram не отобразит
+    def _parse_image(self, poster_urls) -> str | None:
         if isinstance(poster_urls, dict):
             for key in ("2x", "1x", "original"):
                 if poster_urls.get(key):
-                    return [_force_jpeg(poster_urls[key])]
+                    return _force_jpeg(poster_urls[key])
         elif isinstance(poster_urls, str):
-            return [_force_jpeg(poster_urls)]
-        return []
+            return _force_jpeg(poster_urls)
+        return None
 
     def _parse_price(self, formatted_price, url) -> list[dict]:
         ticket = {"url": url or "https://tic.rs", "currency": "RSD"}

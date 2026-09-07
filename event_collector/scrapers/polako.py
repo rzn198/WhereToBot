@@ -1,21 +1,3 @@
-# event_collector/scrapers/polako.py
-# Порт Node RootHandler (plugins/polako) на Python.
-# Источник: Directus API (polako-prod ...ondigitalocean.app). Чистый JSON.
-#
-# Поток (один проход, без detail-запросов):
-#   1. GET ?aggregate[count]=id&filter=...     -> total count
-#   2. пагинация ?fields=...&limit&offset&sort&filter -> страницы событий
-#   3. каждое событие маппится сразу в EventItem
-#
-# Особенности:
-#   - мультиязычность translations: ru > en > sr, фолбэк на name
-#   - город приходит явно (location.city.name); без country (location.city.
-#     country.code) событие пропускается — заодно отсекает онлайн/битые события
-#   - горизонт дат: сегодня .. +3 года, только status=scheduled
-#   - постер: корневой image_cover; если пуст — картинка из translations
-#     (независимый поиск по языкам ru>en>sr); URL с расширением через
-#     filename_disk: /assets/{id}/{filename_disk}
-
 from __future__ import annotations
 
 import asyncio
@@ -40,10 +22,7 @@ PAGE_SIZE = 500
 PAGE_DELAY = 2.0   # пауза между страницами (как rateLimit в оригинале)
 YEARS_AHEAD = 3
 
-# Поля запроса к Directus (slug НЕ запрашиваем явно — вызывает 403,
-# но приходит в ответе автоматически).
-# image_cover.filename_disk — для URL с расширением (.jpg/.png).
-# translations.image_cover.* — fallback-постер, если корневой пуст.
+
 API_FIELDS = ",".join([
     "id", "name", "start_date", "status", "base_currency", "duration",
     "visit_price", "price_type", "for_adults", "book_link",
@@ -61,12 +40,6 @@ LANG_PRIORITY = ["ru", "en", "sr"]
 
 
 def _asset_url(cover: dict | None) -> str | None:
-    """
-    Строит URL постера из объекта directus_files.
-    Формат: /assets/{id}/{filename_disk} — даёт окончание .jpg/.png.
-    Фолбэк на /assets/{id}, если filename_disk отсутствует.
-    Возвращает None, если нет id.
-    """
     if not cover:
         return None
     cover_id = cover.get("id")
@@ -85,7 +58,6 @@ class PolakoScraper(BaseScraper):
         pass
 
     def _build_filter(self) -> str:
-        """Фильтр Directus: будущие события сегодня..+3 года, status=scheduled."""
         today = datetime.now(BELGRADE_TZ)
         year = today.year + YEARS_AHEAD
         frm = today.strftime('%Y-%m-%d') + " 00:00:00"
@@ -103,7 +75,6 @@ class PolakoScraper(BaseScraper):
         api_filter = self._build_filter()
 
         async with httpx.AsyncClient(timeout=TIMEOUT) as client:
-            # Шаг 1: total count
             try:
                 r = await client.get(API_BASE, params={
                     "aggregate[count]": "id",
@@ -119,7 +90,6 @@ class PolakoScraper(BaseScraper):
             if total == 0:
                 return []
 
-            # Шаг 2: пагинация
             items: list[EventItem] = []
             offset = 0
             page = 0
@@ -170,12 +140,10 @@ class PolakoScraper(BaseScraper):
             return None
         source_url = f"{SITE_BASE}/{slug}"
 
-        # title/description: перевод ru>en>sr, фолбэк name
         tr = self._pick_translation(ev.get("translations"))
         title = (tr or {}).get("event_name") or ev.get("name")
         if not title:
             return None
-        # описание: сначала перевод, если пусто — top-level description события
         description = clean_html((tr or {}).get("event_description"))
         if not description:
             description = clean_html(ev.get("description"))
@@ -188,22 +156,17 @@ class PolakoScraper(BaseScraper):
         city_obj = (loc.get("city") or {})
         country = ((city_obj.get("country") or {}).get("code"))
         if not country:
-            return None   # без страны пропускаем (отсекает онлайн/битые события)
+            return None
 
         venue = loc.get("name")
         city = city_obj.get("name")
 
-        # категоризация как в messages: title + description, мульти-лейбл
         cat_text = title
         if description:
             cat_text = f"{title} {description}"
         event_types = categorize(cat_text, channel='polako', position=0)
 
-        # постер: корневой image_cover; если пуст — fallback из translations
-        images = []
-        cover_url = self._pick_cover(ev)
-        if cover_url:
-            images.append(cover_url)
+        images = self._pick_cover(ev)
 
         return EventItem(
             source=self.source,
@@ -229,24 +192,13 @@ class PolakoScraper(BaseScraper):
         return translations[0]
 
     def _pick_cover(self, ev: dict) -> str | None:
-        """
-        Возвращает URL постера.
-        Приоритет:
-          1. корневой image_cover события;
-          2. если пуст — image_cover из translations, независимый поиск
-             по языкам ru>en>sr (первый непустой), image_cover_origin
-             не учитываем;
-          3. подстраховка — любой перевод с картинкой вне приоритета.
-        Возвращает None, если картинки нет нигде.
-        """
-        # 1. корневой постер
+
         root_url = _asset_url(ev.get("image_cover"))
         if root_url:
             return root_url
 
         translations = ev.get("translations") or []
 
-        # 2. fallback: перебор translations по приоритету языка
         for lang in LANG_PRIORITY:
             for t in translations:
                 if t.get("language") != lang:
@@ -255,7 +207,6 @@ class PolakoScraper(BaseScraper):
                 if url:
                     return url
 
-        # 3. подстраховка: любой перевод с картинкой вне приоритета
         for t in translations:
             url = _asset_url(t.get("image_cover"))
             if url:

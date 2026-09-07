@@ -1,17 +1,10 @@
-# event_collector/saver.py
-# Сохранение событий в БД через UPSERT по source_url.
-# Идемпотентно: повторный прогон обновляет существующие строки (updated_at=now()),
-# не плодит дубли и сохраняет id/created_at.
-
 from __future__ import annotations
 
-import json
 from loguru import logger
 
 from event_collector.scrapers.base import EventItem
 from event_collector.city_normalizer import normalize_city
 
-# Имя таблицы (в проде берётся из db.tables.Tables.EVENTS).
 EVENTS_TABLE = 'events'
 
 _UPSERT_SQL = f"""
@@ -37,10 +30,7 @@ ON CONFLICT (source_url) DO UPDATE SET
 
 
 async def save_events(pool, items: list[EventItem]) -> int:
-    """
-    UPSERT списка событий. Возвращает количество обработанных записей.
-    JSONB-поле images сериализуется в JSON-строку для asyncpg.
-    """
+
     if not items:
         logger.info("EVENT_SAVE | nothing to save")
         return 0
@@ -61,7 +51,7 @@ async def save_events(pool, items: list[EventItem]) -> int:
                     it.venue,
                     normalize_city(it.city),
                     it.country,
-                    json.dumps(it.images or []),
+                    it.images,
                     it.dedup_key,
                     it.event_types or [],
                 )
