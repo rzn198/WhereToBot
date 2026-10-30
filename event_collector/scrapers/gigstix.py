@@ -1,3 +1,11 @@
+# event_collector/scrapers/gigstix.py
+# Порт Node (plugins/gigstix) на Python.
+# HTML, два прохода:
+#   Root:  new.gigstix.com/ -> .gt-event-listing .gt-title a -> URL событий
+#   Event: страница события -> поля через CSS-селекторы
+# Категория: из /eventcat/{slug}/ -> русская категория (как biletrs, подход B).
+# Дата: ICS JS-блок (US-формат) primary, сербская дата фолбэк.
+
 from __future__ import annotations
 
 import asyncio
@@ -18,12 +26,14 @@ TIMEOUT = 20
 EVENT_DELAY = 0.3
 UA = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
 
+# slug категории -> русская категория (categorizers_v2.yaml)
 CATEGORY_MAP = {
     "koncert":   "Концерты",
     "festival":  "Фестивали",
     "pozoriste": "Кино/Театр",
     "stand-up":  "Игры и развлечения",
     "sport":     "Спорт/активный отдых",
+    # dogadjaj / istaknuti-dogadjaji -> пропускаем (не тип события)
 }
 
 SERBIAN_MONTHS = {
@@ -51,14 +61,26 @@ class GigstixScraper(BaseScraper):
     def __init__(self, *args, **kwargs):
         pass
 
-    async def fetch(self) -> list[EventItem]:
+    async def fetch(self, known_urls: set[str] | None = None) -> list[EventItem]:
         logger.info("GIGSTIX_FETCH | start")
+        known_urls = known_urls or set()
 
         async with httpx.AsyncClient(timeout=TIMEOUT, headers=UA,
                                      follow_redirects=True) as client:
+            # Root: собираем URL событий
             event_urls = await self._collect_urls(client)
             logger.info(f"GIGSTIX_URLS | count={len(event_urls)}")
 
+            # Отсекаем уже известные (source_url = url листинга) ДО загрузки
+            # detail-страниц. Detail только для новых.
+            total_listed = len(event_urls)
+            event_urls = [u for u in event_urls if u not in known_urls]
+            logger.info(
+                f"GIGSTIX_NEW | listed={total_listed} | new={len(event_urls)} | "
+                f"skipped_known={total_listed - len(event_urls)}"
+            )
+
+            # Event: парсим каждую страницу
             items: list[EventItem] = []
             now = datetime.now(timezone.utc)
             for url in event_urls:
@@ -94,6 +116,7 @@ class GigstixScraper(BaseScraper):
         html = r.text
         t = HTMLParser(html)
 
+        # title: <title> до первого " - "
         title_node = t.css_first("head title")
         title = None
         if title_node:
@@ -101,6 +124,7 @@ class GigstixScraper(BaseScraper):
         if not title:
             return None
 
+        # дата: ICS primary, сербская фолбэк
         starts_at = self._parse_ics(html)
         if not starts_at:
             sr_node = t.css_first(".gt-start-date .gt-inner")
@@ -109,6 +133,7 @@ class GigstixScraper(BaseScraper):
         if not starts_at:
             logger.debug(f"GIGSTIX_NO_DATE | {url}")
             return None
+        # отсекаем прошедшие
         if starts_at < now:
             logger.debug(f"GIGSTIX_PAST | {title} | {starts_at.date()}")
             return None
@@ -119,8 +144,7 @@ class GigstixScraper(BaseScraper):
         city = self._first_text(t, ".gt-locations .gt-inner li")
 
         og_image = t.css_first('meta[property="og:image"]')
-        images = (og_image.attributes["content"]
-                  if (og_image and og_image.attributes.get("content")) else None)
+        images = [og_image.attributes["content"]] if (og_image and og_image.attributes.get("content")) else []
 
         event_types = self._resolve_categories(t)
         tickets, is_soldout = self._parse_tickets(t, url)
@@ -186,6 +210,7 @@ class GigstixScraper(BaseScraper):
             return None
 
     def _resolve_categories(self, tree) -> list[str]:
+        """Из /eventcat/{slug}/ -> русские категории (мульти, дедуп)."""
         result: list[str] = []
         for a in tree.css(".gt-categories .gt-inner li a[href]"):
             href = a.attributes.get("href", "")

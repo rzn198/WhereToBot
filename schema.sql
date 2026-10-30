@@ -126,37 +126,37 @@ CREATE TABLE IF NOT EXISTS cinema_descriptions (
 );
 
 CREATE TABLE IF NOT EXISTS public.events (
-    id           bigserial    NOT NULL,
-    "source"     varchar(30)  NOT NULL,
-    source_url   text         NOT NULL,
-    title        text         NOT NULL,
-    description  text         NULL,
-    starts_at    timestamptz  NOT NULL,
-    ends_at      timestamptz  NULL,
-    venue        text         NULL,
-    address      text         NULL,
-    city         text         NULL,
-    country      bpchar(2)    DEFAULT 'RS'::bpchar NULL,
-    lat          float8       NULL,
-    lon          float8       NULL,
-    event_group  varchar(30)  NULL,
-    event_type   varchar(40)  NULL,
-    is_soldout   bool         DEFAULT false NOT NULL,
-    is_permanent bool         DEFAULT false NOT NULL,
-    images       jsonb        NULL,
-    tickets      jsonb        NULL,
-    dedup_key    text         NULL,
-    created_at   timestamptz  DEFAULT now() NOT NULL,
-    updated_at   timestamptz  DEFAULT now() NOT NULL,
+    id             bigserial     NOT NULL,
+    "source"       varchar(30)   NOT NULL,
+    source_url     text          NOT NULL,
+    title          text          NOT NULL,
+    description    text          NULL,
+    starts_at      date          NOT NULL,
+    venue          text          NULL,
+    city           text          NULL,
+    country        bpchar(2)     DEFAULT 'RS'::bpchar NULL,
+    images         text          NULL,
+    dedup_key      text          NULL,
+    created_at     timestamptz   DEFAULT now() NOT NULL,
+    updated_at     timestamptz   DEFAULT now() NOT NULL,
+    event_types    text[]        NULL,
+    image_file_id  text          NULL,
+    description_ru text          NULL,
     CONSTRAINT events_pkey PRIMARY KEY (id),
     CONSTRAINT uq_events_source_url UNIQUE (source_url)
 );
 
 CREATE INDEX IF NOT EXISTS idx_events_city_starts
     ON public.events USING btree (city, starts_at);
-CREATE INDEX IF NOT EXISTS idx_events_dedup_key
-    ON public.events USING btree (dedup_key);
+CREATE INDEX IF NOT EXISTS idx_events_starts_date
+    ON public.events USING btree (starts_at);
 CREATE INDEX IF NOT EXISTS idx_events_source
     ON public.events USING btree (source);
-CREATE INDEX IF NOT EXISTS idx_events_starts_belgrade_date
-    ON public.events USING btree (date((starts_at AT TIME ZONE 'Europe/Belgrade'::text)));
+CREATE INDEX IF NOT EXISTS idx_events_dedup_key
+    ON public.events USING btree (dedup_key);
+CREATE INDEX IF NOT EXISTS idx_events_event_types
+    ON public.events USING gin (event_types);
+CREATE INDEX IF NOT EXISTS idx_events_image_file_id_null
+    ON public.events USING btree (id) WHERE image_file_id IS NULL;
+CREATE INDEX IF NOT EXISTS idx_events_description_ru_null
+    ON public.events USING btree (id) WHERE description_ru IS NULL;

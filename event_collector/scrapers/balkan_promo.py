@@ -35,6 +35,8 @@ MONTHS = {
     "july": 7, "august": 8, "september": 9, "october": 10, "november": 11, "december": 12,
     "января": 1, "февраля": 2, "марта": 3, "апреля": 4, "мая": 5, "июня": 6,
     "июля": 7, "августа": 8, "сентября": 9, "октября": 10, "ноября": 11, "декабря": 12,
+    "januar": 1, "februar": 2, "mart": 3, "maj": 5, "jun": 6,
+    "jul": 7, "avgust": 8, "septembar": 9, "oktobar": 10, "novembar": 11, "decembar": 12,
 }
 
 _DATE_RE = re.compile(r"(\d{1,2})\s+(\S+)")
@@ -206,15 +208,15 @@ class BalkanPromoScraper(BaseScraper):
             return txt
         return None
 
-    def _extract_image(self, tree, url: str) -> str | None:
+    def _extract_image(self, tree, url: str) -> list[str]:
         bg = tree.css_first('div.component-bg[data-img-id]')
         if bg:
             img_id = bg.attributes.get("data-img-id")
             img_ext = bg.attributes.get("data-img-ext")
             if img_id and img_ext:
-                return f"{BASE}/img/{img_id}.{img_ext}"
+                return [f"{BASE}/img/{img_id}.{img_ext}"]
         og = tree.css_first('meta[property="og:image"]')
         if og and og.attributes.get("content"):
             c = og.attributes["content"]
-            return c if c.startswith("http") else f"{BASE}{c}"
-        return None
+            return [c if c.startswith("http") else f"{BASE}{c}"]
+        return []

@@ -7,6 +7,19 @@ from event_collector.city_normalizer import normalize_city
 
 EVENTS_TABLE = 'events'
 
+
+def _first_image(images) -> str | None:
+    if not images:
+        return None
+    if isinstance(images, str):
+        return images.strip() or None
+    if isinstance(images, (list, tuple)):
+        for u in images:
+            if u:
+                return str(u)
+        return None
+    return None
+
 _UPSERT_SQL = f"""
 INSERT INTO {EVENTS_TABLE} (
     source, source_url, title, description,
@@ -51,7 +64,7 @@ async def save_events(pool, items: list[EventItem]) -> int:
                     it.venue,
                     normalize_city(it.city),
                     it.country,
-                    it.images,
+                    _first_image(it.images),
                     it.dedup_key,
                     it.event_types or [],
                 )

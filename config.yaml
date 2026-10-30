@@ -56,3 +56,13 @@ channels:
       parser: "zarko_tusic"
     - name: "@runningbeg"
       parser: "running_beg"
+
+opencode:
+  base_url: "https://opencode.ai/zen/go/v1"
+  models:
+    - "jev-1.13"
+    - "mimo-v2.6-flash-free"          # 30100 запросов/5ч — основная, самая ёмкая
+    - "deepseek-v4.1-flash-free"  # 7600/5ч — фолбэк (транслитерирует имена в кириллицу)
+    - "glm-5.3-flash"      # 6320/5ч — фолбэк
+    - "longcat-2.0"        # 11400/5ч — фолбэк
+  max_chars: 600

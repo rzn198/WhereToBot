@@ -1,3 +1,12 @@
+# event_collector/scrapers/ticketsrs.py
+# Порт Node (plugins/ticketsrs) на Python.
+# POST API /web/api/data/agnosticget с SessionCode.
+# Листинг самодостаточен (Venue/Price/DateTime/StartDate есть) -> без detail.
+# Обход 21 категории с пагинацией. Категория из slug -> русская (подход B).
+#
+# ВНИМАНИЕ: SessionCode захардкожен. Если API начнёт отдавать пусто/ошибку —
+# сессия протухла, нужно обновить SESSION_CODE (лог TICKETSRS_SESSION_WARN).
+
 from __future__ import annotations
 
 import asyncio
@@ -21,6 +30,12 @@ CAT_DELAY = 1.0
 DESC_DELAY = 0.2
 UA = {"User-Agent": "Mozilla/5.0", "Content-Type": "application/json"}
 
+# Категоризация ticketsrs — гибрид: уточнения + агрегаты.
+# REFINE_MAP: специфичные подкатегории, обходятся ПЕРВЫМИ — дают точную
+#   категорию для своих событий (иначе агрегат огрубил бы: стендап->Театр).
+# AGGREGATE_MAP: слаги-агрегаты "Svi događaji" разделов, обходятся ПОСЛЕ —
+#   добирают все остальные события раздела (грубая категория).
+# Событие из уточнения уже в seen_urls -> агрегат его пропустит (точное победило).
 REFINE_MAP = {
     "decije_predstave_6":  "Семейные/детские",
     "standup_42":          "Игры и развлечения",
@@ -39,6 +54,7 @@ AGGREGATE_MAP = {
     "filmska_projekcija_41":    "Кино/Театр",
 }
 
+# Итоговый порядок обхода: сначала уточнения, потом агрегаты.
 CATEGORY_MAP = {**REFINE_MAP, **AGGREGATE_MAP}
 
 _TIME_RE = re.compile(r"(\d{1,2}):(\d{2})")
@@ -51,11 +67,12 @@ class TicketsRsScraper(BaseScraper):
     def __init__(self, *args, **kwargs):
         pass
 
-    async def fetch(self) -> list[EventItem]:
+    async def fetch(self, known_urls: set[str] | None = None) -> list[EventItem]:
         logger.info("TICKETSRS_FETCH | start")
         now = datetime.now(timezone.utc)
         items: list[EventItem] = []
         seen_urls: set[str] = set()
+        known_urls = known_urls or set()
 
         async with httpx.AsyncClient(timeout=TIMEOUT, headers=UA) as client:
             for slug, category in CATEGORY_MAP.items():
@@ -67,20 +84,33 @@ class TicketsRsScraper(BaseScraper):
                     logger.warning(f"TICKETSRS_CAT_ERROR | slug={slug} | {e}")
                 await asyncio.sleep(CAT_DELAY)
 
+            # Отсекаем уже известные события ДО дорогой фазы 2 (2 detail-запроса
+            # на событие). Новые detail делаем только для новых.
+            total_listed = len(items)
+            items = [it for it in items if it.source_url not in known_urls]
+            logger.info(
+                f"TICKETSRS_NEW | listed={total_listed} | "
+                f"new={len(items)} | skipped_known={total_listed - len(items)}"
+            )
+
+            # Фаза 2: детали для каждого события — описание (PageConfig)
+            # и место/гео (Get4Event). Два запроса на событие.
             logger.info(f"TICKETSRS_DETAIL | enriching {len(items)} events")
             for item in items:
+                # описание
                 try:
                     desc = await self._fetch_description(client, item.source_url)
                     if desc:
                         item.description = desc
                 except Exception as e:
                     logger.debug(f"TICKETSRS_DESC_ERROR | {item.source_url} | {e}")
+                # город / полное имя площадки
                 try:
                     venue, town = await self._fetch_venue(client, item.source_url)
                     if town:
                         item.city = town
                     if venue:
-                        item.venue = venue
+                        item.venue = venue   # полное имя из Get4Event лучше листингового
                 except Exception as e:
                     logger.debug(f"TICKETSRS_VENUE_ERROR | {item.source_url} | {e}")
                 await asyncio.sleep(DESC_DELAY)
@@ -89,6 +119,7 @@ class TicketsRsScraper(BaseScraper):
         return items
 
     async def _fetch_venue(self, client, source_url: str):
+        """web_Get4Event -> (venue_name, town)."""
         slug = source_url.rstrip("/").split("/")[-1]
         payload = {
             "JSONParams": {
@@ -113,6 +144,9 @@ class TicketsRsScraper(BaseScraper):
         return name, town
 
     async def _fetch_description(self, client, source_url: str) -> str | None:
+        """web__Get_PageConfig -> HTML-описание из Layout (устойчивый поиск)."""
+        # source_url = 'https://tickets.rs/event/mira_skoric_24498'
+        # slug для PageConfig = 'mira_skoric_24498' (без 'event/')
         slug = source_url.rstrip("/").split("/")[-1]
         payload = {
             "JSONParams": {
@@ -128,12 +162,15 @@ class TicketsRsScraper(BaseScraper):
         data = d.get("data")
         if not isinstance(data, dict):
             return None
+        # рекурсивно ищем самый длинный Text-виджет с HTML (описание)
         html = self._find_description_text(data.get("Layout"))
         if html:
             return clean_html(html)
         return None
 
     def _find_description_text(self, node) -> str | None:
+        """Ищет в Layout самый длинный строковый Text (HTML-описание).
+        Устойчиво к структуре табов/колонок (не по фиксированным индексам)."""
         best = None
         best_len = 0
 
@@ -141,6 +178,7 @@ class TicketsRsScraper(BaseScraper):
             nonlocal best, best_len
             if isinstance(obj, dict):
                 for k, v in obj.items():
+                    # виджет описания: ключ 'Text' со строкой-HTML
                     if k == "Text" and isinstance(v, str):
                         if ("<p" in v or "<div" in v or len(v) > 100) and len(v) > best_len:
                             best, best_len = v, len(v)
@@ -166,6 +204,7 @@ class TicketsRsScraper(BaseScraper):
         total_pages = (total + per_page - 1) // per_page
 
         result = []
+        # страница 1 уже загружена
         result.extend(self._parse_events(data.get("Events") or [],
                                          category, now, seen_urls))
         # остальные страницы
@@ -180,6 +219,7 @@ class TicketsRsScraper(BaseScraper):
         return result
 
     async def _post(self, client, slug, page):
+        """POST листинга. Пробует голый slug, при пустом ответе — с category/."""
         for slug_variant in (slug, f"category/{slug}"):
             payload = {
                 "JSONParams": {
@@ -196,6 +236,7 @@ class TicketsRsScraper(BaseScraper):
             data = d.get("data") or {}
             if data.get("Events") or (data.get("TotalItems") or 0) > 0:
                 return d
+        # оба варианта пусты — возвращаем последний ответ (для логики пагинации)
         return d
 
     def _parse_events(self, events, category, now, seen_urls):
@@ -211,10 +252,11 @@ class TicketsRsScraper(BaseScraper):
         title = (ev.get("Title") or "").strip()
         if not title:
             return None
+        # фильтр ваучеров (как в Node)
         if "vaučer" in title.lower() or "vaucer" in title.lower():
             return None
 
-        slug = ev.get("Slug") or ""
+        slug = ev.get("Slug") or ""   # 'event/evoken_25749'
         if not slug:
             return None
         source_url = f"{SITE}/{slug}"
@@ -234,7 +276,7 @@ class TicketsRsScraper(BaseScraper):
             "price": price, "currency": "RSD", "url": source_url,
         }] if price else [{"url": source_url, "currency": "RSD"}]
 
-        images = ev.get("ImgSrc") or None   # одна ссылка или None
+        images = [ev["ImgSrc"]] if ev.get("ImgSrc") else []
 
         return EventItem(
             source=self.source,
@@ -249,6 +291,7 @@ class TicketsRsScraper(BaseScraper):
         )
 
     def _parse_dt(self, iso_date, datetime_str) -> datetime | None:
+        """StartDate ISO ('2026-08-12') + время из DateTime ('...19:00')."""
         if not iso_date:
             return None
         try:
