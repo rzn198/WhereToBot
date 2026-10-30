@@ -122,13 +122,13 @@ async def fetch_new_messages(
 
                 event_types = categorize(event.text, channel, position=event.position)
 
-                result = await _save_event(
+                surrogate_id = await _save_event(
                     pool, message, channel, event,
                     channel_id=channel_id,
                     event_types=event_types,
                 )
 
-                if not result:
+                if surrogate_id is None:
                     continue
 
                 saved += 1
@@ -148,8 +148,7 @@ async def fetch_new_messages(
                         if file_id:
                             await _update_photo(
                                 pool=pool,
-                                msg_id=message.id,
-                                position=event.position,
+                                surrogate_id=surrogate_id,
                                 photo_file_id=file_id,
                                 storage_message_id=storage_msg_id,
                             )
@@ -174,7 +173,10 @@ async def _save_event(
     event: ParsedEvent,
     channel_id: int,
     event_types: list[str] | None = None,
-) -> bool:
+) -> int | None:
+    # Возвращает surrogate_id новой строки или None, если событие уже есть.
+    # ON CONFLICT без списка колонок: работает и со старым ключом (id, position),
+    # и с новым (channel_id, id, position), поэтому код можно выкладывать до миграции.
     published_at = message.date.replace(tzinfo=timezone.utc)
 
     query = f"""
@@ -183,7 +185,7 @@ async def _save_event(
             date, published_at, photo_file_id, storage_message_id,
             event_types
         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-        ON CONFLICT (id, position) DO NOTHING
+        ON CONFLICT DO NOTHING
         RETURNING surrogate_id
     """
 
@@ -201,29 +203,28 @@ async def _save_event(
         event_types or [],
     )
 
-    return result is not None
+    return result['surrogate_id'] if result is not None else None
 
 
 async def _update_photo(
     pool: asyncpg.Pool,
-    msg_id: int,
-    position: int,
+    surrogate_id: int,
     photo_file_id: str,
     storage_message_id: int | None,
 ) -> None:
+    # По surrogate_id: (id, position) не уникален между каналами.
     await pool.execute(
         f"""
         UPDATE {Tables.MESSAGES}
         SET photo_file_id = $1,
             storage_message_id = $2
-        WHERE id = $3 AND position = $4
+        WHERE surrogate_id = $3
         """,
         photo_file_id,
         storage_message_id,
-        msg_id,
-        position,
+        surrogate_id,
     )
     logger.debug(
-        f"PHOTO_SAVED | msg_id={msg_id} | pos={position} | "
+        f"PHOTO_SAVED | surrogate_id={surrogate_id} | "
         f"file_id={photo_file_id[:20]}..."
     )
