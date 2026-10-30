@@ -41,6 +41,17 @@ def load_config() -> dict:
         'password': os.getenv('DB_PASSWORD', ''),
     }
 
+    # Перевод описаний событий через OpenCode.
+    # Секрет (api_key) — из env; несекретные настройки (base_url, models,
+    # max_chars) — из config.yaml, секция opencode.
+    yaml_oc = cfg.get('opencode', {}) or {}
+    cfg['opencode'] = {
+        'api_key': os.getenv('OPENCODE_API_KEY', ''),
+        'base_url': yaml_oc.get('base_url', 'https://opencode.ai/zen/go/v1'),
+        'models': yaml_oc.get('models', []),
+        'max_chars': int(yaml_oc.get('max_chars', 600)),
+    }
+
     return cfg
 
 config = load_config()
