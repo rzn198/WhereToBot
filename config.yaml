@@ -6,9 +6,9 @@ scheduler:
   push_alert_time: "09:00"
 
 cleanup:
-  event_cleanup_days: 14
-  favorites_cleanup_days: 14
-  no_date_cleanup_days: 90
+  event_cleanup_days: 7
+  favorites_cleanup_days: 7
+  no_date_cleanup_days: 14
 
 monitoring:
   file_id_error_threshold: 10

@@ -1,6 +1,6 @@
 import json
 import asyncpg
-from datetime import timezone
+from datetime import date, datetime, timedelta, timezone
 from loguru import logger
 from telegram.error import TelegramError
 from telethon import TelegramClient
@@ -9,7 +9,6 @@ from telethon.tl.types import Message
 
 from collector.parsers.zarko_tusic import ZarkoTusicParser
 from collector.parsers.running_beg import RunningBegParser
-#from collector.categorizer import categorize
 from collector.categorizer_v2 import categorize
 from shared.config import config
 from db.tables import Tables
@@ -35,6 +34,32 @@ def get_parser_for_channel(channel: str):
     return DefaultParser()
 
 
+def _retention_days() -> tuple[int, int] | None:
+    cfg = config.get('cleanup') or {}
+    try:
+        return (
+            int(cfg['event_cleanup_days']),
+            int(cfg['no_date_cleanup_days']),
+        )
+    except (KeyError, TypeError, ValueError):
+        return None
+
+
+def _is_expired(
+    event_date,
+    published_at: datetime,
+    now: datetime,
+    event_cleanup_days: int,
+    no_date_cleanup_days: int,
+) -> bool:
+    if isinstance(event_date, datetime):
+        event_date = event_date.date()
+    if isinstance(event_date, date):
+        return event_date < now.date() - timedelta(days=event_cleanup_days)
+    if event_date is None:
+        return published_at < now - timedelta(days=no_date_cleanup_days)
+    return False
+
 async def fetch_new_messages(
     client: TelegramClient,
     channel: str,
@@ -48,6 +73,14 @@ async def fetch_new_messages(
 
     parser = get_parser_for_channel(channel)
     saved = 0
+    skipped_expired = 0
+    retention = _retention_days()
+    if retention is None:
+        logger.warning(
+            f"RETENTION_UNKNOWN | channel={channel} | "
+            "config.cleanup incomplete: expired events are NOT skipped"
+        )
+    now = datetime.now(timezone.utc)
 
     try:
         entity = await client.get_entity(channel)
@@ -72,7 +105,15 @@ async def fetch_new_messages(
             )
             continue
 
+        published_at = message.date.replace(tzinfo=timezone.utc)
+
         for event in events:
+            if retention is not None and _is_expired(
+                event.date, published_at, now, *retention,
+            ):
+                skipped_expired += 1
+                continue
+
             try:
                 try:
                     channel_id = abs(message.peer_id.channel_id)
@@ -119,7 +160,10 @@ async def fetch_new_messages(
                     f"msg_id={message.id} pos={event.position} | {e}"
                 )
 
-    logger.info(f"Saved {saved} new events from {channel}")
+    logger.info(
+        f"Saved {saved} new events from {channel} "
+        f"(skipped_expired={skipped_expired})"
+    )
     return saved
 
 
