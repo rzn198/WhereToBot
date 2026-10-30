@@ -13,7 +13,7 @@ CREATE TABLE messages (
     hidden_by_admin     BOOLEAN       NOT NULL DEFAULT FALSE,
     duplicate_of        BIGINT        REFERENCES messages(surrogate_id),
 
-    CONSTRAINT uq_messages_id_position UNIQUE (id, position)
+    CONSTRAINT uq_messages_channel_id_position UNIQUE (channel_id, id, position)
 );
 
 CREATE INDEX idx_messages_date_created    ON messages (date, created_at);
