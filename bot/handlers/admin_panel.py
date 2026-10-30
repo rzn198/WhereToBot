@@ -736,7 +736,7 @@ async def handle_admin_new_event_save(
             id, position, channel_id, text, entities,
             date, published_at
         ) VALUES ($1, $2, $3, $4, $5, $6, $7)
-        ON CONFLICT (id, position) DO NOTHING
+        ON CONFLICT DO NOTHING
     """,
         manual_id,
         0,          # position
