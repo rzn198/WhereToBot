@@ -1,3 +1,11 @@
+# event_collector/scrapers/ticrs.py
+# tic.rs: листинг — серверный HTML, список событий — карточки
+# <article class="event-card" data-event-id="…"> с датой (<time datetime>),
+# местом, заголовком и картинкой. «Показать ещё» = следующая HTML-страница по
+# data-next-url у элемента [data-tic-catalog-pages].
+# Описание — из JSON API /api/event/{id} (best-effort: при сбое событие
+# всё равно сохраняется по данным карточки).
+
 from __future__ import annotations
 
 import asyncio
@@ -7,37 +15,32 @@ from zoneinfo import ZoneInfo
 
 import httpx
 from loguru import logger
+from selectolax.parser import HTMLParser
 
+from event_collector.concurrency import gather_limited
 from event_collector.scrapers.base import BaseScraper, EventItem
 from event_collector.normalize import clean_html, build_dedup_key
+from event_collector.retention import too_far
 from collector.categorizer_v2 import categorize
 
 BELGRADE_TZ = ZoneInfo('Europe/Belgrade')
-CITY = "belgrade"
-LISTING = "https://tic.rs/ru/belgrad"
-DETAIL = "https://tic.rs/api/event/{id}"
+SITE = "https://tic.rs"
+LISTING = f"{SITE}/ru/belgrad"
+DETAIL = f"{SITE}/api/event/{{id}}"
 TIMEOUT = 20
 PAGE_DELAY = 0.5
-DETAIL_DELAY = 0.2
+MAX_PAGES = 50   # предохранитель от зацикливания пагинации
 
-XHR = {
-    "X-Requested-With": "XMLHttpRequest",
-    "Accept": "application/json",
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
+HTML_HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                  "(KHTML, like Gecko) Chrome/124.0 Safari/537.36",
+    "Accept": "text/html",
+    "Accept-Language": "ru,en;q=0.8",
 }
-
-MONTHS_RU = {
-    "января": 1, "февраля": 2, "марта": 3, "апреля": 4, "мая": 5, "июня": 6,
-    "июля": 7, "августа": 8, "сентября": 9, "октября": 10, "ноября": 11, "декабря": 12,
-}
-MONTHS_EN = {
-    "january": 1, "february": 2, "march": 3, "april": 4, "may": 5, "june": 6,
-    "july": 7, "august": 8, "september": 9, "october": 10, "november": 11, "december": 12,
-}
-
-_DATE_RE = re.compile(r"(\d{1,2})\s+(\w+),?\s+(\d{1,2}):(\d{2})")
+JSON_HEADERS = {**HTML_HEADERS, "Accept": "application/json"}
 
 _CF_FORMAT_RE = re.compile(r"format=[a-z0-9]+", re.IGNORECASE)
+_SRCSET_2X_RE = re.compile(r"(\S+)\s+2x")
 
 
 def _force_jpeg(url: str | None) -> str | None:
@@ -57,187 +60,175 @@ class TicRsScraper(BaseScraper):
     def __init__(self, *args, **kwargs):
         pass
 
-    async def fetch(self) -> list[EventItem]:
+    async def fetch(self, known_urls: set[str] | None = None) -> list[EventItem]:
         logger.info("TICRS_FETCH | start")
+        # размер листинга для мониторинга (None = листинг не получен)
+        self.listed_count = None
+        known_urls = known_urls or set()
         now = datetime.now(timezone.utc)
 
-        async with httpx.AsyncClient(timeout=TIMEOUT, headers=XHR,
+        async with httpx.AsyncClient(timeout=TIMEOUT, headers=HTML_HEADERS,
                                      follow_redirects=True) as client:
-            event_ids = await self._collect_ids(client)
-            logger.info(f"TICRS_IDS | count={len(event_ids)}")
+            cards = await self._collect_cards(client)
+            logger.info(f"TICRS_IDS | count={len(cards)}")
+            self.listed_count = len(cards)
 
-            items: list[EventItem] = []
-            for eid in event_ids:
+            # Известные и прошедшие отсекаем по данным карточки ДО detail-запроса.
+            fresh = []
+            skipped_known = skipped_past = 0
+            for card in cards:
+                if card["source_url"] in known_urls:
+                    skipped_known += 1
+                elif card["starts_at"] < now:
+                    skipped_past += 1
+                    logger.debug(
+                        f"TICRS_PAST | {card['title']} | {card['starts_at'].date()}"
+                    )
+                elif too_far(card["starts_at"].date()):
+                    logger.debug(
+                        f"TICRS_TOO_FAR | {card['title']} | {card['starts_at'].date()}"
+                    )
+                else:
+                    fresh.append(card)
+            logger.info(
+                f"TICRS_NEW | listed={len(cards)} | new={len(fresh)} | "
+                f"skipped_known={skipped_known} | skipped_past={skipped_past}"
+            )
+
+            async def build(card):
                 try:
-                    item = await self._fetch_detail(client, eid, now)
-                    if item:
-                        items.append(item)
+                    return await self._build_item(client, card)
                 except Exception as e:
-                    logger.warning(f"TICRS_DETAIL_ERROR | id={eid} | {e}")
-                await asyncio.sleep(DETAIL_DELAY)
+                    logger.warning(f"TICRS_DETAIL_ERROR | id={card['id']} | {e}")
+                    return None
+
+            built = await gather_limited(fresh, build)
+            items = [it for it in built if it]
 
         logger.info(f"TICRS_DONE | total_events={len(items)}")
         return items
 
-    async def _collect_ids(self, client) -> list[str]:
-        ids: list[str] = []
-        seen: set[str] = set()
-        page = 1
-        while True:
+    # ------------------------------------------------------------------
+    # листинг
+
+    async def _collect_cards(self, client) -> list[dict]:
+        cards: list[dict] = []
+        seen_ids: set[str] = set()
+        seen_urls: set[str] = set()
+        url: str | None = LISTING
+        pages = 0
+        while url and url not in seen_urls and pages < MAX_PAGES:
+            seen_urls.add(url)
             try:
-                r = await client.get(LISTING, params={"page": str(page)})
+                r = await client.get(url)
                 r.raise_for_status()
-                d = r.json()
             except Exception as e:
-                logger.warning(f"TICRS_LISTING_ERROR | page={page} | {e}")
+                logger.warning(f"TICRS_LISTING_ERROR | url={url} | {e}")
                 break
+            pages += 1
+            page_cards, next_url = self._parse_listing(r.text)
+            if not page_cards:
+                logger.warning(f"TICRS_LISTING_EMPTY | url={url}")
+            for card in page_cards:
+                if card["id"] not in seen_ids:
+                    seen_ids.add(card["id"])
+                    cards.append(card)
+            if next_url:
+                next_url = next_url if next_url.startswith("http") else SITE + next_url
+                await asyncio.sleep(PAGE_DELAY)
+            url = next_url or None
+        logger.debug(f"TICRS_PAGES | pages={pages} | cards={len(cards)}")
+        return cards
 
-            data = d.get("data") or []
-            for ev in data:
-                eid = ev.get("id")
-                if eid and str(eid) not in seen:
-                    seen.add(str(eid))
-                    ids.append(str(eid))
+    def _parse_listing(self, html: str) -> tuple[list[dict], str | None]:
+        tree = HTMLParser(html)
+        cards = []
+        for art in tree.css("article.event-card"):
+            card = self._parse_card(art)
+            if card:
+                cards.append(card)
+        panel = tree.css_first("[data-tic-catalog-pages]")
+        next_url = (panel.attributes.get("data-next-url") or "").strip() if panel else ""
+        return cards, next_url or None
 
-            pag = d.get("pagination") or {}
-            total_pages = pag.get("total_pages") or 1
-            current = pag.get("current_page")
-            if current is not None and page > 1 and current != page:
-                logger.warning(
-                    f"TICRS_PAGE_RESET | запросили page={page}, "
-                    f"вернулась current_page={current} — стоп пагинации"
-                )
-                break
-            if page >= total_pages or not data:
-                break
-            page += 1
-            await asyncio.sleep(PAGE_DELAY)
-        return ids
-
-    async def _fetch_detail(self, client, eid: str, now: datetime) -> EventItem | None:
-        r = await client.get(DETAIL.format(id=eid))
-        if r.status_code == 404:
+    def _parse_card(self, art) -> dict | None:
+        eid = art.attributes.get("data-event-id")
+        link = art.css_first("h2.event-title a") or art.css_first("a[href]")
+        time_node = art.css_first(".date-line time")
+        if not eid or not link or not time_node:
             return None
-        r.raise_for_status()
-        d = r.json()
-        obj = d.get("data") if isinstance(d, dict) and "data" in d else d
-        if not isinstance(obj, dict):
+        href = (link.attributes.get("href") or "").strip()
+        title = link.text(strip=True)
+        if not href or not title:
             return None
-
-        title = (obj.get("name") or "").strip()
-        if not title:
+        starts_at = self._parse_iso(time_node.attributes.get("datetime"))
+        if starts_at is None:
             return None
-        description = clean_html(obj.get("description") or obj.get("description_html"))
+        venue_node = art.css_first(".event-place .venue")
+        return {
+            "id": eid,
+            "title": title,
+            "source_url": href if href.startswith("http") else SITE + href,
+            "starts_at": starts_at,
+            "venue": venue_node.text(strip=True) or None if venue_node else None,
+            "image": self._card_image(art),
+        }
 
-        starts_at = self._parse_date(obj.get("date_text"), obj.get("calendar"), now)
-        if not starts_at:
-            logger.debug(f"TICRS_NO_DATE | id={eid} | {title}")
+    def _card_image(self, art) -> str | None:
+        img = art.css_first("a.poster-link img") or art.css_first("img")
+        if not img:
             return None
-        if starts_at < now:
-            logger.debug(f"TICRS_PAST | {title} | {starts_at.date()}")
+        srcset = img.attributes.get("srcset") or ""
+        m = _SRCSET_2X_RE.search(srcset)
+        return _force_jpeg(m.group(1) if m else img.attributes.get("src"))
+
+    def _parse_iso(self, s: str | None) -> datetime | None:
+        if not s:
             return None
+        try:
+            dt = datetime.fromisoformat(s.strip().replace("Z", "+00:00"))
+        except ValueError:
+            return None
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=BELGRADE_TZ)
+        return dt
 
-        venue = self._parse_place(obj)
+    # ------------------------------------------------------------------
+    # detail (описание)
 
-        cat_text = title
-        if description:
-            cat_text = f"{title} {description}"
+    async def _build_item(self, client, card: dict) -> EventItem:
+        description = await self._fetch_description(client, card["id"])
+
+        title = card["title"]
+        cat_text = f"{title} {description}" if description else title
         event_types = categorize(cat_text, channel='ticrs', position=0)
-
-        images = self._parse_image(obj.get("poster_urls"))
-        tickets = self._parse_price(obj.get("formatted_price"), obj.get("url"))
-        source_url = obj.get("url") or f"https://tic.rs/ru/belgrade/events/{eid}"
 
         return EventItem(
             source=self.source,
-            source_url=source_url,
+            source_url=card["source_url"],
             title=title,
             description=description,
-            starts_at=starts_at,
-            venue=venue,
+            starts_at=card["starts_at"],
+            venue=card["venue"],
             city="Belgrade",
             country="RS",
             event_types=event_types,
-            images=images,
-            dedup_key=build_dedup_key(title, starts_at, "Belgrade"),
+            images=card["image"],
+            dedup_key=build_dedup_key(title, card["starts_at"], "Belgrade"),
         )
 
-    def _parse_date(self, date_text, calendar, now) -> datetime | None:
-        if calendar:
-            iso = None
-            # реальная структура: [{'date_start': '2026-09-07T20:00:00+02:00', ...}]
-            if isinstance(calendar, list) and calendar:
-                first = calendar[0]
-                if isinstance(first, dict):
-                    iso = (first.get("date_start") or first.get("start")
-                           or first.get("date"))
-            elif isinstance(calendar, dict):
-                iso = (calendar.get("date_start") or calendar.get("start")
-                       or calendar.get("date"))
-            elif isinstance(calendar, str):
-                iso = calendar
-            if iso:
-                dt = self._parse_iso(iso)
-                if dt:
-                    return dt
-
-        if not date_text:
-            return None
-        m = _DATE_RE.search(date_text)
-        if not m:
-            return None
-        day, month_name, hour, minute = m.groups()
-        month = MONTHS_RU.get(month_name.lower()) or MONTHS_EN.get(month_name.lower())
-        if not month:
-            logger.warning(f"TICRS_UNKNOWN_MONTH | {month_name!r}")
-            return None
-        year = now.astimezone(BELGRADE_TZ).year
+    async def _fetch_description(self, client, eid: str) -> str | None:
+        """Описание из /api/event/{id}. Сбой не критичен: None."""
         try:
-            dt = datetime(year, month, int(day), int(hour), int(minute), tzinfo=BELGRADE_TZ)
-        except ValueError:
-            return None
-        if dt < now:
-            try:
-                dt = datetime(year + 1, month, int(day), int(hour), int(minute), tzinfo=BELGRADE_TZ)
-            except ValueError:
+            r = await client.get(DETAIL.format(id=eid), headers=JSON_HEADERS)
+            if r.status_code == 404:
                 return None
-        return dt
-
-    def _parse_iso(self, s: str) -> datetime | None:
-        try:
-            dt = datetime.fromisoformat(s.replace("Z", "+00:00"))
-            if dt.tzinfo is None:
-                dt = dt.replace(tzinfo=BELGRADE_TZ)
-            return dt
-        except (ValueError, AttributeError):
+            r.raise_for_status()
+            d = r.json()
+        except Exception as e:
+            logger.debug(f"TICRS_DESC_ERROR | id={eid} | {e}")
             return None
-
-    def _parse_place(self, obj) -> str | None:
-        place = obj.get("place")
-        if isinstance(place, dict):
-            return place.get("name") or place.get("title")
-        elif isinstance(place, str):
-            return place
-        return None
-
-    def _parse_image(self, poster_urls) -> str | None:
-        if isinstance(poster_urls, dict):
-            for key in ("2x", "1x", "original"):
-                if poster_urls.get(key):
-                    return _force_jpeg(poster_urls[key])
-        elif isinstance(poster_urls, str):
-            return _force_jpeg(poster_urls)
-        return None
-
-    def _parse_price(self, formatted_price, url) -> list[dict]:
-        ticket = {"url": url or "https://tic.rs", "currency": "RSD"}
-        if formatted_price:
-            m = re.search(r"([\d.]+)", formatted_price.replace(".", "").replace(",", "."))
-            pm = re.search(r"[\d.,]+", formatted_price)
-            if pm:
-                num = pm.group().replace(".", "").replace(",", ".")
-                try:
-                    ticket["price"] = int(float(num))
-                except ValueError:
-                    pass
-        return [ticket]
+        obj = d.get("data") if isinstance(d, dict) and "data" in d else d
+        if not isinstance(obj, dict):
+            return None
+        return clean_html(obj.get("description") or obj.get("description_html"))

@@ -53,11 +53,14 @@ class BalkanPromoScraper(BaseScraper):
 
     async def fetch(self) -> list[EventItem]:
         logger.info("BALKAN_FETCH | start")
+        # размер листинга для мониторинга (None = листинг не получен)
+        self.listed_count = None
 
         async with httpx.AsyncClient(timeout=TIMEOUT, headers=UA,
                                      follow_redirects=True) as client:
             urls = await self._collect_urls(client)
             logger.info(f"BALKAN_URLS | count={len(urls)}")
+            self.listed_count = len(urls)
 
             items: list[EventItem] = []
             now = datetime.now(timezone.utc)

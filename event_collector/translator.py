@@ -1,28 +1,9 @@
-# event_collector/translator.py
-# Перевод описаний событий (сербский/английский -> русский) через
-# OpenCode (OpenAI-совместимый API). Запускается после сбора событий.
-#
-# Стратегия (согласована):
-#   - только новые: description_ru IS NULL AND description непустой
-#   - по одному событию за запрос (без батча)
-#   - список моделей из конфига, дешёвые первыми
-#   - ЗАЛИПАЮЩИЙ указатель модели: любая ошибка модели (429/сеть/5xx/400/
-#     плохой результат) сдвигает указатель вперёд НАВСЕГДА в этом прогоне
-#   - временная ошибка (сеть/5xx): ретрай той же 1-2 раза, потом сдвиг
-#   - 401/403 (ключ): стоп всего прогона
-#   - все модели кончились: стоп, остаток на следующий прогон
-#   - валидация: пусто + аномальная длина (>3x) -> сдвиг
-#
-# Постобработка перед сохранением:
-#   - обрезка по границе слова + "..." до N символов (конфиг)
-#   - escape_md текста (идентично боту), затем \n\n + Markdown-ссылка
-#     [ссылка на билеты здесь](source_url)  (ссылка не экранируется)
-
 from __future__ import annotations
 
 import asyncio
 import re
 import uuid
+from time import sleep
 
 import httpx
 from loguru import logger
@@ -30,15 +11,12 @@ from loguru import logger
 from db.tables import Tables
 from shared.config import config
 
-# ---- постобработка ----
 TICKETS_LINK_TEXT = "ссылка на билеты здесь"
 ELLIPSIS = "..."
 
-# ретраи для временных ошибок (сеть/5xx) на одной модели
 TEMP_RETRIES = 2
 TEMP_RETRY_DELAY = 1.0
 
-# порог аномальной длины результата (болтовня) — во сколько раз длиннее оригинала
 MAX_LEN_RATIO = 3
 # ratio проверяем только для достаточно длинных результатов — на очень
 # коротких (1-2 слова) даже нормальный перевод может дать высокий ratio
@@ -186,6 +164,8 @@ async def translate_new(pool) -> int:
     base_url = tg.get("base_url") or "https://opencode.ai/zen/go/v1"
     models = tg.get("models") or []
     max_chars = int(tg.get("max_chars") or 600)
+    print('TRANSLATE_START')
+    sleep(6000000)
 
     if not api_key or not models:
         logger.warning("TRANSLATE_SKIP | opencode api_key/models не заданы")

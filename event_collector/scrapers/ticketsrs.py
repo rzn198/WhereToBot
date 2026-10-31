@@ -19,6 +19,8 @@ from loguru import logger
 
 from event_collector.scrapers.base import BaseScraper, EventItem
 from event_collector.normalize import build_dedup_key, clean_html
+from event_collector.concurrency import gather_limited
+from event_collector.retention import too_far
 
 BELGRADE_TZ = ZoneInfo('Europe/Belgrade')
 API = "https://tickets.rs/web/api/data/agnosticget"
@@ -27,7 +29,6 @@ SESSION_CODE = "12C1E0F33673E440A77C47D316944EB8"
 TIMEOUT = 20
 PAGE_DELAY = 0.5
 CAT_DELAY = 1.0
-DESC_DELAY = 0.2
 UA = {"User-Agent": "Mozilla/5.0", "Content-Type": "application/json"}
 
 # Категоризация ticketsrs — гибрид: уточнения + агрегаты.
@@ -69,6 +70,8 @@ class TicketsRsScraper(BaseScraper):
 
     async def fetch(self, known_urls: set[str] | None = None) -> list[EventItem]:
         logger.info("TICKETSRS_FETCH | start")
+        # размер листинга для мониторинга (None = листинг не получен)
+        self.listed_count = None
         now = datetime.now(timezone.utc)
         items: list[EventItem] = []
         seen_urls: set[str] = set()
@@ -87,6 +90,7 @@ class TicketsRsScraper(BaseScraper):
             # Отсекаем уже известные события ДО дорогой фазы 2 (2 detail-запроса
             # на событие). Новые detail делаем только для новых.
             total_listed = len(items)
+            self.listed_count = total_listed
             items = [it for it in items if it.source_url not in known_urls]
             logger.info(
                 f"TICKETSRS_NEW | listed={total_listed} | "
@@ -96,7 +100,7 @@ class TicketsRsScraper(BaseScraper):
             # Фаза 2: детали для каждого события — описание (PageConfig)
             # и место/гео (Get4Event). Два запроса на событие.
             logger.info(f"TICKETSRS_DETAIL | enriching {len(items)} events")
-            for item in items:
+            async def enrich(item):
                 # описание
                 try:
                     desc = await self._fetch_description(client, item.source_url)
@@ -113,7 +117,8 @@ class TicketsRsScraper(BaseScraper):
                         item.venue = venue   # полное имя из Get4Event лучше листингового
                 except Exception as e:
                     logger.debug(f"TICKETSRS_VENUE_ERROR | {item.source_url} | {e}")
-                await asyncio.sleep(DESC_DELAY)
+
+            await gather_limited(items, enrich)
 
         logger.info(f"TICKETSRS_DONE | total_events={len(items)}")
         return items
@@ -266,6 +271,10 @@ class TicketsRsScraper(BaseScraper):
             return None
         if starts_at < now:
             logger.debug(f"TICKETSRS_PAST | {title} | {starts_at.date()}")
+            return None
+        # заглушки вроде 2028-12-31 (постоянные достопримечательности)
+        if too_far(starts_at.date()):
+            logger.debug(f"TICKETSRS_TOO_FAR | {title} | {starts_at.date()}")
             return None
 
         ends_at = self._parse_dt(ev.get("EndDate"), ev.get("DateTime"))

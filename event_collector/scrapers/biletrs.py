@@ -19,11 +19,11 @@ from loguru import logger
 from event_collector.scrapers.base import BaseScraper, EventItem
 from event_collector.normalize import parse_datetime, draftjs_to_text, build_dedup_key
 from event_collector.city_normalizer import find_city_in_text
+from event_collector.concurrency import gather_limited
 
 LISTING_URL = "https://bilet.rs/events"
 DETAIL_URL = "https://app.bilet.rs/api/v1/public/shows/{id}"
 TIMEOUT = 20
-DETAIL_DELAY = 0.15
 TAG_DELAY = 1.0
 
 UA = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
@@ -55,15 +55,20 @@ class BiletRsScraper(BaseScraper):
 
     def __init__(self, *args, **kwargs):
         self._url_by_id: dict[str, str] = {}
+        # startDate из JSON-LD листинга: позволяет не ходить за прошедшими
+        self._start_by_id: dict[str, datetime] = {}
 
     async def fetch(self, known_urls: set[str] | None = None) -> list[EventItem]:
         logger.info("BILETRS_FETCH | start")
+        # размер листинга для мониторинга (None = листинг не получен)
+        self.listed_count = None
         known_urls = known_urls or set()
 
         async with httpx.AsyncClient(timeout=TIMEOUT, headers=UA) as client:
             # Фаза 1: собираем id из всех тегов (дедуп)
             event_ids = await self._collect_ids(client)
             logger.info(f"BILETRS_IDS | unique={len(event_ids)}")
+            self.listed_count = len(event_ids)
 
             # Отсекаем известные ДО detail: source_url = self._url_by_id[eid]
             # (публичный url с фолбэком) уже построен в фазе 1.
@@ -78,17 +83,32 @@ class BiletRsScraper(BaseScraper):
                 f"skipped_known={total_listed - len(event_ids)}"
             )
 
-            # Фаза 2: detail по каждому id
-            items: list[EventItem] = []
+            # Прошедшие отсекаем по startDate листинга ДО detail-запроса.
+            # Прошедшие события в БД не попадают, значит, в known_urls их нет —
+            # без этого фильтра за ними ходили бы на каждом прогоне.
             now = datetime.now(timezone.utc)
+            fresh: list[str] = []
             for eid in event_ids:
+                start = self._start_by_id.get(eid)
+                if start is not None and start < now:
+                    continue
+                fresh.append(eid)
+            logger.info(
+                f"BILETRS_PAST_LISTING | skipped={len(event_ids) - len(fresh)} | "
+                f"to_fetch={len(fresh)}"
+            )
+            event_ids = fresh
+
+            # Фаза 2: detail по каждому id (ограниченная параллельность)
+            async def fetch_one(eid):
                 try:
-                    item = await self._fetch_detail(client, eid, now)
-                    if item:
-                        items.append(item)
+                    return await self._fetch_detail(client, eid, now)
                 except Exception as e:
                     logger.warning(f"BILETRS_DETAIL_ERROR | id={eid} | {e}")
-                await asyncio.sleep(DETAIL_DELAY)
+                    return None
+
+            fetched = await gather_limited(event_ids, fetch_one)
+            items: list[EventItem] = [it for it in fetched if it]
 
         logger.info(f"BILETRS_DONE | total_events={len(items)}")
         return items
@@ -131,6 +151,9 @@ class BiletRsScraper(BaseScraper):
                     # публичный url: домен app.bilet.rs -> bilet.rs, slug сохраняем
                     public_url = url.replace("https://app.bilet.rs", "https://bilet.rs")
                     self._url_by_id[eid] = public_url
+                    start = parse_datetime(item.get("startDate"))
+                    if start is not None:
+                        self._start_by_id[eid] = start
                     cnt += 1
             logger.debug(f"BILETRS_TAG | tag={tag} | new_ids={cnt}")
             await asyncio.sleep(TAG_DELAY)
