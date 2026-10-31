@@ -9,6 +9,8 @@ cleanup:
   event_cleanup_days: 7
   favorites_cleanup_days: 7
   no_date_cleanup_days: 14
+  events_cleanup_days: 7
+  events_max_future_days: 365
 
 monitoring:
   file_id_error_threshold: 10
@@ -46,6 +48,7 @@ cinema_collector:
 
 event_collector:
   parse_interval_hours: 6
+  detail_concurrency: 5
 
 Menu text:
   "Афиша белграда. Все события в одном месте!"

@@ -135,6 +135,8 @@ class PolakoScraper(BaseScraper):
 
     async def fetch(self) -> list[EventItem]:
         logger.info("POLAKO_FETCH | start")
+        # размер листинга для мониторинга (None = листинг не получен)
+        self.listed_count = None
         api_filter = self._build_filter()
 
         async with httpx.AsyncClient(timeout=TIMEOUT) as client:
@@ -151,6 +153,7 @@ class PolakoScraper(BaseScraper):
                 return []
 
             logger.info(f"POLAKO_TOTAL | count={total}")
+            self.listed_count = total
             if total == 0:
                 return []
 

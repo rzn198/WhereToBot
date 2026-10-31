@@ -2,6 +2,7 @@ import asyncpg
 from loguru import logger
 
 from db.tables import Tables
+from event_collector.retention import get_window
 from shared.config import config
 
 
@@ -16,6 +17,7 @@ async def run_cleanup(pool: asyncpg.Pool) -> dict:
     cfg = config.get('cleanup', {})
     event_cleanup_days = int(cfg.get('event_cleanup_days', 30))
     no_date_cleanup_days = int(cfg.get('no_date_cleanup_days', 7))
+    events_past_days, events_future_days = get_window()
 
     async with pool.acquire() as conn:
         async with conn.transaction():
@@ -70,13 +72,20 @@ async def run_cleanup(pool: asyncpg.Pool) -> dict:
                 RETURNING date IS NULL AS no_date
             """)
 
+            events_deleted = _count(await conn.execute(f"""
+                DELETE FROM {Tables.EVENTS}
+                WHERE starts_at < CURRENT_DATE - make_interval(days => $1)
+                   OR starts_at > CURRENT_DATE + make_interval(days => $2)
+            """, events_past_days, events_future_days))
+
     no_date_count = sum(1 for r in rows if r['no_date'])
     dated_count = len(rows) - no_date_count
     alerts_detached = _count(result_alerts)
 
     logger.info(
         f"CLEANUP | dated={dated_count} | no_date={no_date_count} | "
-        f"held_by_dup_refs={held_count} | alerts_detached={alerts_detached}"
+        f"held_by_dup_refs={held_count} | alerts_detached={alerts_detached} | "
+        f"events={events_deleted}"
     )
 
     return {
@@ -84,4 +93,5 @@ async def run_cleanup(pool: asyncpg.Pool) -> dict:
         'no_date': no_date_count,
         'held': held_count,
         'alerts_detached': alerts_detached,
+        'events': events_deleted,
     }

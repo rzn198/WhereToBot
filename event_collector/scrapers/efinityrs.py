@@ -18,6 +18,8 @@ from loguru import logger
 
 from event_collector.scrapers.base import BaseScraper, EventItem
 from event_collector.city_normalizer import find_city_in_text
+from event_collector.concurrency import gather_limited
+from event_collector.retention import get_window, too_far
 from event_collector.normalize import (
     clean_html,
     parse_datetime,
@@ -29,7 +31,6 @@ COLLECTION_URL = f"{API_BASE}/CardType/Collection?countryId=196"
 DETAIL_URL = f"{API_BASE}/CardType?id={{id}}"
 SITE_BASE = "https://efinity.rs"
 TIMEOUT = 15
-DETAIL_DELAY = 0.1  # пауза между detail-запросами, щадим API
 
 # Маппинг категорий (сырьём, как в Node). Ключ = lower(NameEN).
 CATEGORIES: dict[str, dict[str, str]] = {
@@ -71,6 +72,8 @@ class EfinityRsScraper(BaseScraper):
 
     async def fetch(self, known_urls: set[str] | None = None) -> list[EventItem]:
         logger.info("EFINITYRS_FETCH | start")
+        # размер листинга для мониторинга (None = листинг не получен)
+        self.listed_count = None
         known_urls = known_urls or set()
 
         async with httpx.AsyncClient(timeout=TIMEOUT) as client:
@@ -93,40 +96,61 @@ class EfinityRsScraper(BaseScraper):
             # --- Шаг 2: разворот parent->children ---
             raw_events = self._flatten(card_types)
             logger.info(f"EFINITYRS_LEAF_EVENTS | count={len(raw_events)}")
+            self.listed_count = len(raw_events)
 
             # --- Шаг 3-4: детали + маппинг ---
             # Отсекаем известные ДО detail-запроса: source_url строится из
             # UrlName+Id, которые есть в raw_event (до detail).
+            # Постоянные экспозиции (Start в прошлом) и заглушки с датой
+            # далеко в будущем отсекаем тут же, по данным листинга, чтобы не
+            # делать для них detail-запрос на каждом прогоне.
+            now = datetime.now(timezone.utc)
+            future_days = get_window()[1]
             new_events = []
+            skipped_stale = 0
             for ev in raw_events:
                 eid = ev.get("Id")
                 if not eid:
                     continue
                 su = f"{SITE_BASE}/event-details/{ev.get('UrlName','')}_{eid}"
-                if su not in known_urls:
-                    new_events.append(ev)
+                if su in known_urls:
+                    continue
+                if self._is_stale(ev, now, future_days):
+                    skipped_stale += 1
+                    continue
+                new_events.append(ev)
             logger.info(
                 f"EFINITYRS_NEW | listed={len(raw_events)} | new={len(new_events)} | "
-                f"skipped_known={len(raw_events) - len(new_events)}"
+                f"skipped_known={len(raw_events) - len(new_events) - skipped_stale} | "
+                f"skipped_stale={skipped_stale}"
             )
 
-            items: list[EventItem] = []
-            for ev in new_events:
+            async def build(ev):
                 try:
-                    item = await self._build_item(client, ev, categories)
-                    if item:
-                        items.append(item)
+                    return await self._build_item(client, ev, categories)
                 except Exception as e:
                     logger.warning(
                         f"EFINITYRS_EVENT_ERROR | id={ev.get('Id')} "
                         f"({ev.get('Name')}) | {e}"
                     )
-                await asyncio.sleep(DETAIL_DELAY)
+                    return None
+
+            built = await gather_limited(new_events, build)
+            items: list[EventItem] = [it for it in built if it]
 
         logger.info(f"EFINITYRS_DONE | total_events={len(items)}")
         return items
 
     # ------------------------------------------------------------------
+
+    @staticmethod
+    def _is_stale(ev: dict, now: datetime, future_days: int) -> bool:
+        """True для событий, которые не храним: без даты, Start в прошлом
+        (постоянные экспозиции и прошедшие), Start дальше future_days."""
+        start = parse_datetime(ev.get("Start"))
+        if start is None or start < now:
+            return True
+        return too_far(start.date(), future_days=future_days)
 
     def _flatten(self, card_types: list[dict]) -> list[dict]:
         """Разворачивает родительские события в листовые (children)."""
@@ -180,26 +204,14 @@ class EfinityRsScraper(BaseScraper):
             logger.debug(f"EFINITYRS_NO_DATE | id={event_id} | {title}")
             return None
 
-        ends_at = parse_datetime(ev.get("End"))
-
-        # Классификация по времени:
-        #   Start в будущем              -> обычное событие
-        #   Start в прошлом + End=None   -> постоянная экспозиция (is_permanent)
-        #   Start в прошлом + End задан  -> прошедшее разовое событие, отсекаем
+        # Только события, которые ещё впереди: прошедшие и постоянные
+        # экспозиции (Start в прошлом) не храним — см. _is_stale.
         now = datetime.now(timezone.utc)
-        is_permanent = False
-        if starts_at < now:
-            if ends_at is None:
-                is_permanent = True
-                logger.debug(
-                    f"EFINITYRS_PERMANENT | id={event_id} | {title}"
-                )
-            else:
-                logger.debug(
-                    f"EFINITYRS_PAST | id={event_id} | {title} | "
-                    f"{starts_at.date()}..{ends_at.date()}"
-                )
-                return None
+        if self._is_stale(ev, now, get_window()[1]):
+            logger.debug(
+                f"EFINITYRS_STALE | id={event_id} | {title} | {starts_at.date()}"
+            )
+            return None
 
         description = self._extract_description(details)
         venue = ev.get("Where")

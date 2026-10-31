@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import re
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from zoneinfo import ZoneInfo
 
 import httpx
@@ -18,12 +18,12 @@ from loguru import logger
 from selectolax.parser import HTMLParser
 
 from event_collector.scrapers.base import BaseScraper, EventItem
+from event_collector.concurrency import gather_limited
 from event_collector.normalize import clean_html, build_dedup_key
 
 BELGRADE_TZ = ZoneInfo('Europe/Belgrade')
 HOME = "https://new.gigstix.com/"
 TIMEOUT = 20
-EVENT_DELAY = 0.3
 UA = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
 
 # slug категории -> русская категория (categorizers_v2.yaml)
@@ -51,6 +51,8 @@ _ICS_DATE_RE = re.compile(
 _SR_DATE_RE = re.compile(
     r"(\d{1,2})\.\s+(\w+)\s+(\d{4})\.\s+(\d{1,2})\.(\d{2})"
 )
+# дата в карточке листинга: «petak 13. novembra 2026.»
+_CARD_DATE_RE = re.compile(r"(\d{1,2})\.\s+(\w+)\s+(\d{4})")
 _CAT_RE = re.compile(r"eventcat/([a-z0-9-]+)")
 _PRICE_RE = re.compile(r"([\d.]+)\s*(DIN|RSD)", re.I)
 
@@ -59,10 +61,13 @@ class GigstixScraper(BaseScraper):
     source = 'gigstix'
 
     def __init__(self, *args, **kwargs):
-        pass
+        # дата начала из карточки листинга: url -> date
+        self._card_date: dict[str, date] = {}
 
     async def fetch(self, known_urls: set[str] | None = None) -> list[EventItem]:
         logger.info("GIGSTIX_FETCH | start")
+        # размер листинга для мониторинга (None = листинг не получен)
+        self.listed_count = None
         known_urls = known_urls or set()
 
         async with httpx.AsyncClient(timeout=TIMEOUT, headers=UA,
@@ -70,6 +75,7 @@ class GigstixScraper(BaseScraper):
             # Root: собираем URL событий
             event_urls = await self._collect_urls(client)
             logger.info(f"GIGSTIX_URLS | count={len(event_urls)}")
+            self.listed_count = len(event_urls)
 
             # Отсекаем уже известные (source_url = url листинга) ДО загрузки
             # detail-страниц. Detail только для новых.
@@ -80,17 +86,31 @@ class GigstixScraper(BaseScraper):
                 f"skipped_known={total_listed - len(event_urls)}"
             )
 
-            # Event: парсим каждую страницу
-            items: list[EventItem] = []
+            # Прошедшие (по дате карточки) отсекаем ДО загрузки страницы.
+            # События с датой «сегодня» идут дальше: по времени решает detail.
+            today = datetime.now(BELGRADE_TZ).date()
+            fresh = [
+                u for u in event_urls
+                if not (self._card_date.get(u) and self._card_date[u] < today)
+            ]
+            logger.info(
+                f"GIGSTIX_PAST_LISTING | skipped={len(event_urls) - len(fresh)} | "
+                f"to_fetch={len(fresh)}"
+            )
+            event_urls = fresh
+
+            # Event: парсим каждую страницу (ограниченная параллельность)
             now = datetime.now(timezone.utc)
-            for url in event_urls:
+
+            async def fetch_one(url):
                 try:
-                    item = await self._fetch_event(client, url, now)
-                    if item:
-                        items.append(item)
+                    return await self._fetch_event(client, url, now)
                 except Exception as e:
                     logger.warning(f"GIGSTIX_EVENT_ERROR | {url} | {e}")
-                await asyncio.sleep(EVENT_DELAY)
+                    return None
+
+            fetched = await gather_limited(event_urls, fetch_one)
+            items: list[EventItem] = [it for it in fetched if it]
 
         logger.info(f"GIGSTIX_DONE | total_events={len(items)}")
         return items
@@ -108,7 +128,41 @@ class GigstixScraper(BaseScraper):
                 if href not in seen:
                     seen.add(href)
                     ordered.append(href)
+                    card_date = self._card_date_for(a)
+                    if card_date:
+                        self._card_date[href] = card_date
         return ordered
+
+    def _card_date_for(self, title_link) -> date | None:
+        """Дата карточки: ближайший предок ссылки заголовка, внутри которого
+        ровно один .gt-title (сама карточка) и есть .gt-date."""
+        node = title_link.parent
+        for _ in range(6):
+            if node is None:
+                return None
+            if len(node.css(".gt-title")) == 1:
+                span = node.css_first(".gt-date span")
+                if span:
+                    return self._parse_card_date(span.text(strip=True))
+            elif len(node.css(".gt-title")) > 1:
+                return None   # дошли до контейнера нескольких карточек
+            node = node.parent
+        return None
+
+    def _parse_card_date(self, text: str) -> date | None:
+        if not text:
+            return None
+        m = _CARD_DATE_RE.search(text)
+        if not m:
+            return None
+        day, month_name, year = m.groups()
+        month = SERBIAN_MONTHS.get(month_name.lower())
+        if not month:
+            return None
+        try:
+            return date(int(year), month, int(day))
+        except ValueError:
+            return None
 
     async def _fetch_event(self, client, url: str, now: datetime) -> EventItem | None:
         r = await client.get(url)

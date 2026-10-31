@@ -4,6 +4,7 @@ from loguru import logger
 
 from event_collector.scrapers.base import EventItem
 from event_collector.city_normalizer import normalize_city
+from event_collector.retention import get_window, in_window
 
 EVENTS_TABLE = 'events'
 
@@ -50,6 +51,24 @@ async def save_events(pool, items: list[EventItem]) -> int:
 
     source = items[0].source
     saved = 0
+
+    past_days, future_days = get_window()
+    kept = []
+    skipped = 0
+    for it in items:
+        d = it.starts_at.date() if it.starts_at else None
+        if in_window(d, past_days=past_days, future_days=future_days):
+            kept.append(it)
+        else:
+            skipped += 1
+    if skipped:
+        logger.info(
+            f"EVENT_SKIPPED_OUT_OF_WINDOW | source={source} | skipped={skipped}"
+        )
+    items = kept
+    if not items:
+        logger.info(f"EVENT_SAVED | source={source} | saved=0")
+        return 0
 
     async with pool.acquire() as conn:
         for it in items:
