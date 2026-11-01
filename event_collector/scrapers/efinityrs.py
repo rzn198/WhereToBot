@@ -1,13 +1,3 @@
-# event_collector/scrapers/efinityrs.py
-# Порт Node RootHandler (plugins/efinityrs) на Python.
-# Источник: findloyalty API (oblaci.rs). Чистый JSON, без авторизации.
-#
-# Поток (один проход, N+1 запросов):
-#   1. GET /api/CardType/Collection?countryId=196  -> {CardTypes[], Categories[]}
-#   2. Разворот parent->children (наследование Categories/Subcategories)
-#   3. Для каждого события: resolveCategory + GET /api/CardType?id={id} (детали)
-#   4. Маппинг в EventItem через normalize
-
 from __future__ import annotations
 
 import asyncio
@@ -19,6 +9,7 @@ from loguru import logger
 from event_collector.scrapers.base import BaseScraper, EventItem
 from event_collector.city_normalizer import find_city_in_text
 from event_collector.concurrency import gather_limited
+from event_collector.known import is_known
 from event_collector.retention import get_window, too_far
 from event_collector.normalize import (
     clean_html,
@@ -32,7 +23,6 @@ DETAIL_URL = f"{API_BASE}/CardType?id={{id}}"
 SITE_BASE = "https://efinity.rs"
 TIMEOUT = 15
 
-# Маппинг категорий (сырьём, как в Node). Ключ = lower(NameEN).
 CATEGORIES: dict[str, dict[str, str]] = {
     "sport":            {"group": "sports",  "type": "match"},
     "comedy":           {"group": "theater", "type": "comedy"},
@@ -47,7 +37,6 @@ CATEGORIES: dict[str, dict[str, str]] = {
 }
 DEFAULT_CATEGORY = {"group": "music", "type": "concert"}
 
-# event_group -> русская категория (event_types). Все возможные group из CATEGORIES.
 GROUP_TO_CATEGORY = {
     "music":   "Концерты",
     "theater": "Кино/Театр",
@@ -58,7 +47,6 @@ GROUP_TO_CATEGORY = {
 }
 DEFAULT_EVENT_TYPE = "Концерты"
 
-# efinityrs — белградский источник (координаты подтверждают Белград)
 DEFAULT_CITY = "Belgrade"
 
 
@@ -66,18 +54,14 @@ class EfinityRsScraper(BaseScraper):
     source = 'efinityrs'
 
     def __init__(self, cinema: dict | None = None):
-        # cinema-параметр не нужен efinityrs (API сам отдаёт всё), оставлен
-        # для единообразия сигнатуры с другими скраперами.
         pass
 
     async def fetch(self, known_urls: set[str] | None = None) -> list[EventItem]:
         logger.info("EFINITYRS_FETCH | start")
-        # размер листинга для мониторинга (None = листинг не получен)
         self.listed_count = None
         known_urls = known_urls or set()
 
         async with httpx.AsyncClient(timeout=TIMEOUT) as client:
-            # --- Шаг 1: коллекция ---
             try:
                 resp = await client.get(COLLECTION_URL)
                 resp.raise_for_status()
@@ -93,17 +77,10 @@ class EfinityRsScraper(BaseScraper):
                 f"categories={len(categories)}"
             )
 
-            # --- Шаг 2: разворот parent->children ---
             raw_events = self._flatten(card_types)
             logger.info(f"EFINITYRS_LEAF_EVENTS | count={len(raw_events)}")
             self.listed_count = len(raw_events)
 
-            # --- Шаг 3-4: детали + маппинг ---
-            # Отсекаем известные ДО detail-запроса: source_url строится из
-            # UrlName+Id, которые есть в raw_event (до detail).
-            # Постоянные экспозиции (Start в прошлом) и заглушки с датой
-            # далеко в будущем отсекаем тут же, по данным листинга, чтобы не
-            # делать для них detail-запрос на каждом прогоне.
             now = datetime.now(timezone.utc)
             future_days = get_window()[1]
             new_events = []
@@ -113,7 +90,7 @@ class EfinityRsScraper(BaseScraper):
                 if not eid:
                     continue
                 su = f"{SITE_BASE}/event-details/{ev.get('UrlName','')}_{eid}"
-                if su in known_urls:
+                if is_known(known_urls, su, parse_datetime(ev.get("Start"))):
                     continue
                 if self._is_stale(ev, now, future_days):
                     skipped_stale += 1
@@ -141,26 +118,21 @@ class EfinityRsScraper(BaseScraper):
         logger.info(f"EFINITYRS_DONE | total_events={len(items)}")
         return items
 
-    # ------------------------------------------------------------------
 
     @staticmethod
     def _is_stale(ev: dict, now: datetime, future_days: int) -> bool:
-        """True для событий, которые не храним: без даты, Start в прошлом
-        (постоянные экспозиции и прошедшие), Start дальше future_days."""
         start = parse_datetime(ev.get("Start"))
         if start is None or start < now:
             return True
         return too_far(start.date(), future_days=future_days)
 
     def _flatten(self, card_types: list[dict]) -> list[dict]:
-        """Разворачивает родительские события в листовые (children)."""
         events: list[dict] = []
         for ct in card_types:
             children = ct.get("Children") or []
             if ct.get("ChildCount", 0) > 0 and children:
                 for child in children:
                     merged = dict(child)
-                    # наследуем категории родителя, если у ребёнка пусто
                     if not (child.get("Categories") or []):
                         merged["Categories"] = ct.get("Categories")
                     if not (child.get("Subcategories") or []):
@@ -185,7 +157,6 @@ class EfinityRsScraper(BaseScraper):
 
         cat = self._resolve_category(ev, categories)
 
-        # --- детали (координаты, цены, описание) ---
         details = None
         try:
             dresp = await client.get(DETAIL_URL.format(id=event_id))
@@ -200,12 +171,9 @@ class EfinityRsScraper(BaseScraper):
 
         starts_at = parse_datetime(ev.get("Start"))
         if not starts_at:
-            # без даты события нам не нужны (лента строится по дате)
             logger.debug(f"EFINITYRS_NO_DATE | id={event_id} | {title}")
             return None
 
-        # Только события, которые ещё впереди: прошедшие и постоянные
-        # экспозиции (Start в прошлом) не храним — см. _is_stale.
         now = datetime.now(timezone.utc)
         if self._is_stale(ev, now, get_window()[1]):
             logger.debug(
@@ -215,7 +183,6 @@ class EfinityRsScraper(BaseScraper):
 
         description = self._extract_description(details)
         venue = ev.get("Where")
-        # город из venue (Where); не нашли известный -> Belgrade
         city = find_city_in_text(venue, default=DEFAULT_CITY)
         images = [ev["Image"]] if ev.get("Image") else []
 
@@ -248,7 +215,6 @@ class EfinityRsScraper(BaseScraper):
         if not category:
             return DEFAULT_CATEGORY
 
-        # сперва пробуем подкатегорию
         if subcategory_id:
             sub = next(
                 (s for s in (category.get("Subcategories") or [])

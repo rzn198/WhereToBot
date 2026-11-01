@@ -53,7 +53,6 @@ class BalkanPromoScraper(BaseScraper):
 
     async def fetch(self) -> list[EventItem]:
         logger.info("BALKAN_FETCH | start")
-        # размер листинга для мониторинга (None = листинг не получен)
         self.listed_count = None
 
         async with httpx.AsyncClient(timeout=TIMEOUT, headers=UA,

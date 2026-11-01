@@ -1,26 +1,3 @@
-# event_collector/health.py
-# Мониторинг скраперов: тихая поломка источника (как было с ticrs, который
-# неделями отдавал 0 событий) должна доходить до админа сообщением в Telegram.
-#
-# Метрика — размер ЛИСТИНГА источника (`scraper.listed_count`), а не число
-# сохранённых событий: при known_urls на обычном прогоне новых событий почти
-# нет, и «0 новых» — норма. Источник считается сломанным, если:
-#   - скрапер упал с исключением;
-#   - листинг не получен (listed_count остался None) или пуст (0);
-#   - листинг резко сократился относительно медианы последних здоровых
-#     прогонов (по умолчанию меньше 50%).
-# Алерт шлётся при переходе «здоров -> сломан», напоминание — раз в
-# remind_hours, а при восстановлении — сообщение «восстановился».
-# Состояние хранится в памяти процесса event_collector.
-#
-# Настройки (config.yaml, все необязательны):
-#   event_collector:
-#     health:
-#       enabled: true
-#       drop_ratio: 0.5
-#       remind_hours: 24
-#       alerts_in_local: false   # при APP_ENV=local только лог, без Telegram
-
 from __future__ import annotations
 
 import statistics
@@ -44,7 +21,6 @@ class RunResult:
     saved: int = 0
     seconds: float = 0.0
     error: str | None = None
-    # False — скрапер не сообщает размер листинга (не оцениваем)
     reports: bool = True
     listed: int | None = None
 
@@ -67,7 +43,6 @@ class HealthMonitor:
         self._last_alert: dict[str, float] = {}
 
     def evaluate(self, r: RunResult, drop_ratio: float = DEFAULT_DROP_RATIO):
-        """(ok, причина). Не меняет состояние."""
         if r.error:
             return False, f"скрапер упал: {r.error}"
         if not r.reports:
@@ -88,7 +63,6 @@ class HealthMonitor:
     def process(self, results: list[RunResult], now: float | None = None,
                 drop_ratio: float = DEFAULT_DROP_RATIO,
                 remind_hours: float = DEFAULT_REMIND_HOURS) -> list[str]:
-        """Обновляет состояние и возвращает тексты алертов."""
         now = time.time() if now is None else now
         messages: list[str] = []
         for r in results:
@@ -113,7 +87,6 @@ class HealthMonitor:
                 self._status[r.source] = 'ok'
                 continue
 
-            # сломан: не пишем сломанные значения в историю
             if prev != 'broken':
                 messages.append(f"🔴 {r.source}: {reason}")
                 self._last_alert[r.source] = now
@@ -128,7 +101,6 @@ monitor = HealthMonitor()
 
 
 async def notify_admin(text: str) -> bool:
-    """Отправляет сообщение админу от имени основного бота. Не бросает."""
     tg = config.get('telegram') or {}
     token, admin_id = tg.get('bot_token'), tg.get('admin_user_id')
     if not token or not admin_id:
@@ -145,8 +117,6 @@ async def notify_admin(text: str) -> bool:
 
 
 async def report(results: list[RunResult]) -> list[str]:
-    """Оценивает прогон и рассылает алерты. Любая ошибка гасится: мониторинг
-    не должен ронять коллектор."""
     try:
         s = _settings()
         if not s['enabled']:

@@ -1,6 +1,3 @@
-# event_collector/scheduler.py
-# Планировщик запуска event-скраперов по интервалу.
-
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from loguru import logger
 
@@ -9,7 +6,6 @@ from event_collector.runner import run_all_scrapers
 
 
 async def job_parse_events(pool) -> None:
-    """Прогоняет все event-скраперы."""
     await run_all_scrapers(pool)
 
 

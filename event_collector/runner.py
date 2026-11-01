@@ -1,12 +1,9 @@
-# event_collector/runner.py
-# Запуск всех event-скраперов по очереди и сохранение в БД.
-# Скраперы async (httpx) — вызываются напрямую, без executor.
-# Каждый скрапер изолирован try/except: падение одного не роняет остальные.
-
 import asyncio
 import time
 
 from loguru import logger
+
+from datetime import date, timedelta
 
 from event_collector import health
 from event_collector.health import RunResult
@@ -19,8 +16,6 @@ from event_collector.scrapers.polako import PolakoScraper
 from event_collector.scrapers.ticketsrs import TicketsRsScraper
 from event_collector.scrapers.ticrs import TicRsScraper
 
-# Список активных скраперов. Добавление нового источника =
-# добавить класс сюда (и файл в scrapers/).
 SCRAPERS = [
     EfinityRsScraper,
     PolakoScraper,
@@ -33,29 +28,19 @@ SCRAPERS = [
 
 
 async def run_all_scrapers(pool) -> int:
-    """
-    Прогоняет все скраперы по очереди, сохраняет события в БД.
-    Возвращает суммарное количество сохранённых записей.
 
-    Оптимизация «только новые»: один раз читаем все source_url, уже
-    сохранённые в БД, и передаём это множество каждому скраперу как
-    known_urls. Адаптированные скраперы пропускают известные события
-    ДО дорогих detail-запросов (экономия сети/времени). Неадаптированные
-    скраперы параметр игнорируют и работают как раньше.
-    """
     logger.info("EVENT_RUN_START")
 
-    # известные source_url — один запрос на весь прогон
     try:
-        rows = await pool.fetch("SELECT source_url FROM events")
-        known = {r["source_url"] for r in rows}
+        rows = await pool.fetch("SELECT source_url, starts_at FROM events")
+        known = {r["source_url"]: r["starts_at"] for r in rows}
     except Exception as e:
         logger.error(f"EVENT_KNOWN_ERROR | {e}")
-        known = set()
+        known = {}
     logger.info(f"EVENT_KNOWN | count={len(known)}")
 
-    # Скраперы ходят на разные сайты и независимы друг от друга, поэтому
-    # идут одновременно: общее время ~ самый долгий скрапер, а не сумма.
+    known = _drop_upcoming_for_refresh(known)
+
     started = time.perf_counter()
     results = await asyncio.gather(
         *(_run_one(cls, pool, known) for cls in SCRAPERS)
@@ -65,11 +50,8 @@ async def run_all_scrapers(pool) -> int:
         f"EVENT_SCRAPERS_DONE | seconds={time.perf_counter() - started:.1f}"
     )
 
-    # Мониторинг: сломанный источник -> алерт админу (ошибки гасятся внутри)
     await health.report(list(results))
 
-    # Шаг перевода: новые события (description_ru IS NULL) -> русский.
-    # Изолирован try/except: сбой перевода не роняет коллектор.
     try:
         from event_collector.translator import translate_new
         await translate_new(pool)
@@ -80,9 +62,35 @@ async def run_all_scrapers(pool) -> int:
     return total
 
 
+_last_refresh_day: date | None = None
+
+
+def _refresh_days() -> int:
+    from shared.config import config
+    cfg = config.get('event_collector', {}) or {}
+    try:
+        return max(0, int(cfg.get('refresh_upcoming_days', 7)))
+    except (TypeError, ValueError):
+        return 7
+
+
+def _drop_upcoming_for_refresh(known: dict, today: date | None = None) -> dict:
+    global _last_refresh_day
+    days = _refresh_days()
+    today = today or date.today()
+    if days <= 0 or _last_refresh_day == today:
+        return known
+    _last_refresh_day = today
+    horizon = today + timedelta(days=days)
+    keep = {u: d for u, d in known.items()
+            if not (d is not None and d <= horizon)}
+    logger.info(
+        f"EVENT_REFRESH | upcoming_days={days} | refetch={len(known) - len(keep)}"
+    )
+    return keep
+
+
 async def _run_one(scraper_cls, pool, known) -> RunResult:
-    """Один скрапер: fetch + сохранение. Сбой изолирован, наружу уходит
-    RunResult (для логов и мониторинга)."""
     name = getattr(scraper_cls, 'source', scraper_cls.__name__)
     t0 = time.perf_counter()
     scraper = None
@@ -102,8 +110,6 @@ async def _run_one(scraper_cls, pool, known) -> RunResult:
 
 
 def _result(name, scraper, saved, seconds, error=None) -> RunResult:
-    # у скрапера есть атрибут listed_count -> он сообщает размер листинга
-    # (None = до листинга не дошёл); нет атрибута -> не оцениваем.
     reports = scraper is not None and hasattr(scraper, 'listed_count')
     return RunResult(
         source=name, saved=saved, seconds=seconds, error=error,
@@ -113,11 +119,6 @@ def _result(name, scraper, saved, seconds, error=None) -> RunResult:
 
 
 async def _call_fetch(scraper, known):
-    """
-    Вызывает scraper.fetch, передавая known_urls если скрапер его принимает.
-    Обратная совместимость: старые скраперы с fetch() без параметра
-    вызываются как раньше.
-    """
     import inspect
     sig = inspect.signature(scraper.fetch)
     if "known_urls" in sig.parameters:

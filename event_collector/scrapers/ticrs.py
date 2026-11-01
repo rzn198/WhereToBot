@@ -18,6 +18,7 @@ from loguru import logger
 from selectolax.parser import HTMLParser
 
 from event_collector.concurrency import gather_limited
+from event_collector.known import is_known
 from event_collector.scrapers.base import BaseScraper, EventItem
 from event_collector.normalize import clean_html, build_dedup_key
 from event_collector.retention import too_far
@@ -77,7 +78,7 @@ class TicRsScraper(BaseScraper):
             fresh = []
             skipped_known = skipped_past = 0
             for card in cards:
-                if card["source_url"] in known_urls:
+                if is_known(known_urls, card["source_url"], card["starts_at"]):
                     skipped_known += 1
                 elif card["starts_at"] < now:
                     skipped_past += 1
