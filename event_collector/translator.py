@@ -3,7 +3,6 @@ from __future__ import annotations
 import asyncio
 import re
 import uuid
-from time import sleep
 
 import httpx
 from loguru import logger
@@ -164,8 +163,6 @@ async def translate_new(pool) -> int:
     base_url = tg.get("base_url") or "https://opencode.ai/zen/go/v1"
     models = tg.get("models") or []
     max_chars = int(tg.get("max_chars") or 600)
-    print('TRANSLATE_START')
-    sleep(6000000)
 
     if not api_key or not models:
         logger.warning("TRANSLATE_SKIP | opencode api_key/models не заданы")
