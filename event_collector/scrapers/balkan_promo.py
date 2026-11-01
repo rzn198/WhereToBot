@@ -187,12 +187,13 @@ class BalkanPromoScraper(BaseScraper):
         if not month:
             logger.warning(f"BALKAN_UNKNOWN_MONTH | {m.group(2)!r}")
             return None
-        year = now.astimezone(BELGRADE_TZ).year
+        today = now.astimezone(BELGRADE_TZ).date()
+        year = today.year
         try:
             dt = datetime(year, month, day, 20, 0, tzinfo=BELGRADE_TZ)
         except ValueError:
             return None
-        if dt < now:
+        if dt.date() < today:
             try:
                 dt = datetime(year + 1, month, day, 20, 0, tzinfo=BELGRADE_TZ)
             except ValueError:
