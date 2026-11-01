@@ -1,6 +1,3 @@
-# event_collector/main.py
-# Точка входа event_collector контейнера.
-
 import asyncio
 import os
 import sys
@@ -26,11 +23,9 @@ async def main():
     pool = await init_db_pool()
     await validate_config_tables(pool)
 
-    # Первый запуск сразу при старте
     logger.info("Running initial event scrape...")
     await run_all_scrapers(pool)
 
-    # Планировщик
     scheduler = start_event_scheduler(pool)
 
     try:

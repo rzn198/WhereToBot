@@ -20,6 +20,7 @@ from loguru import logger
 from event_collector.scrapers.base import BaseScraper, EventItem
 from event_collector.normalize import build_dedup_key, clean_html
 from event_collector.concurrency import gather_limited
+from event_collector.known import is_known
 from event_collector.retention import too_far
 
 BELGRADE_TZ = ZoneInfo('Europe/Belgrade')
@@ -91,7 +92,8 @@ class TicketsRsScraper(BaseScraper):
             # на событие). Новые detail делаем только для новых.
             total_listed = len(items)
             self.listed_count = total_listed
-            items = [it for it in items if it.source_url not in known_urls]
+            items = [it for it in items
+                     if not is_known(known_urls, it.source_url, it.starts_at)]
             logger.info(
                 f"TICKETSRS_NEW | listed={total_listed} | "
                 f"new={len(items)} | skipped_known={total_listed - len(items)}"

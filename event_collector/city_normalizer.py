@@ -1,15 +1,8 @@
-# event_collector/city_normalizer.py
-# Единая нормализация города перед сохранением в БД.
-# Канон — английское написание. Районы схлопываются в город.
-# Чистит HTML-entities, лишние пробели; пустое -> None.
-
 from __future__ import annotations
 
 import re
 import html
 
-# Канон -> список алиасов (в нижнем регистре, после чистки).
-# Всё, что совпало с алиасом (или самим каноном), приводится к канону.
 _CITY_ALIASES = {
     "Belgrade": [
         "belgrade", "beograd", "белград",
@@ -49,7 +42,6 @@ _CITY_ALIASES = {
     "Skopje": ["skopje", "скопје", "скопје - карпош", "skopje - karpoš"],
 }
 
-# Разворачиваем в плоскую карту alias -> канон (один раз при импорте).
 _ALIAS_TO_CANON: dict[str, str] = {}
 for _canon, _aliases in _CITY_ALIASES.items():
     _ALIAS_TO_CANON[_canon.lower()] = _canon
@@ -58,24 +50,16 @@ for _canon, _aliases in _CITY_ALIASES.items():
 
 
 def _clean_raw(value: str) -> str:
-    """HTML-entities (&nbsp;), теги, схлопывание пробелов, trim."""
     if not value:
         return ""
-    v = html.unescape(value)          # &nbsp; -> \xa0, &amp; -> & и т.п.
-    v = re.sub(r"<[^>]+>", " ", v)     # срезаем случайные теги
-    v = v.replace("\xa0", " ")          # неразрывный пробел -> обычный
-    v = re.sub(r"\s+", " ", v).strip()  # схлопываем пробелы
+    v = html.unescape(value)
+    v = re.sub(r"<[^>]+>", " ", v)
+    v = v.replace("\xa0", " ")
+    v = re.sub(r"\s+", " ", v).strip()
     return v
 
 
 def normalize_city(value: str | None) -> str | None:
-    """
-    Приводит город к каноническому написанию.
-    - чистит HTML/пробелы
-    - известные алиасы -> канон (английский)
-    - пустое -> None
-    - неизвестный город -> очищенное исходное (не теряем данные)
-    """
     if not value:
         return None
     cleaned = _clean_raw(value)
@@ -84,24 +68,15 @@ def normalize_city(value: str | None) -> str | None:
     canon = _ALIAS_TO_CANON.get(cleaned.lower())
     if canon:
         return canon
-    # неизвестный город — возвращаем очищенным (сохраняем как есть)
     return cleaned
 
 
 def find_city_in_text(text: str | None, default: str = "Belgrade") -> str:
-    """
-    Ищет известный город ВНУТРИ произвольной строки (напр. 'Klub X, Niš'
-    или 'Foxtrot Cafe Novi Sad'). Возвращает канон найденного города,
-    иначе default. Для источников, где город вшит в строку места (biletrs).
-    Многословные алиасы проверяются first (novi sad до nis и т.п.).
-    """
     if not text:
         return default
     low = _clean_raw(text).lower()
     if not low:
         return default
-    # сортируем алиасы по длине убыв. — чтобы 'novi sad' сматчился раньше 'nis',
-    # 'bački petrovac' раньше отдельных слов и т.п.
     best_canon = None
     best_len = 0
     for alias, canon in _ALIAS_TO_CANON.items():

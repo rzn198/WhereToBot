@@ -19,6 +19,7 @@ from selectolax.parser import HTMLParser
 
 from event_collector.scrapers.base import BaseScraper, EventItem
 from event_collector.concurrency import gather_limited
+from event_collector.known import is_known
 from event_collector.normalize import clean_html, build_dedup_key
 
 BELGRADE_TZ = ZoneInfo('Europe/Belgrade')
@@ -80,7 +81,8 @@ class GigstixScraper(BaseScraper):
             # Отсекаем уже известные (source_url = url листинга) ДО загрузки
             # detail-страниц. Detail только для новых.
             total_listed = len(event_urls)
-            event_urls = [u for u in event_urls if u not in known_urls]
+            event_urls = [u for u in event_urls
+                          if not is_known(known_urls, u, self._card_date.get(u))]
             logger.info(
                 f"GIGSTIX_NEW | listed={total_listed} | new={len(event_urls)} | "
                 f"skipped_known={total_listed - len(event_urls)}"
