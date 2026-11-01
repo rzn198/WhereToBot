@@ -82,6 +82,11 @@ from bot.handlers.calendar import (
     handle_calendar_nav,
 )
 
+from bot.handlers.categories import (
+    handle_categories_menu,
+    handle_category,
+)
+
 from bot.handlers.cinema import (
     handle_cinema_menu,
     handle_cinema_filter,
@@ -184,6 +189,9 @@ async def main():
     app.add_handler(CallbackQueryHandler(handle_filter, pattern='^calendar_date:'))
 
     app.add_handler(CallbackQueryHandler(handle_filter, pattern='^filter:'))
+
+    app.add_handler(CallbackQueryHandler(handle_categories_menu, pattern='^cats:menu$'))
+    app.add_handler(CallbackQueryHandler(handle_category, pattern='^cat:'))
 
     app.add_handler(CallbackQueryHandler(handle_navigation, pattern='^nav:'))
 

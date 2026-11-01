@@ -7,6 +7,7 @@ def get_event_nav_keyboard(
     surrogate_id: int,
     is_favorite: bool,
     is_preview: bool = False,
+    back_to_categories: bool = False,
 ) -> InlineKeyboardMarkup:
 
     counter_or_expand = (
@@ -32,7 +33,12 @@ def get_event_nav_keyboard(
             InlineKeyboardButton('🔜', callback_data='nav:next'),
         ],
         [fav_btn, hide_btn],
-        [
-            InlineKeyboardButton('🏠 В меню', callback_data='nav:menu'),
-        ],
+        (
+            [
+                InlineKeyboardButton('🗂 К категориям', callback_data='cats:menu'),
+                InlineKeyboardButton('🏠 В меню', callback_data='nav:menu'),
+            ]
+            if back_to_categories else
+            [InlineKeyboardButton('🏠 В меню', callback_data='nav:menu')]
+        ),
     ])

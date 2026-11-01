@@ -13,19 +13,35 @@ async def send_push_notifications(bot: Bot, pool) -> None:
     today = date.today()
     logger.info(f"PUSH_START | date={today}")
 
+    # избранное на сегодня: посты каналов и события сайтов (для события в
+    # напоминании — название и место)
     rows = await pool.fetch(
         f"""
         SELECT
-            f.user_id,
-            array_agg(m.text ORDER BY m.date, m.created_at) as event_texts
-        FROM {Tables.FAVORITES} f
-        JOIN {Tables.MESSAGES} m ON m.surrogate_id = f.msg_id
-        WHERE m.date = $1
-        AND m.surrogate_id NOT IN (
-            SELECT msg_id FROM {Tables.HIDDEN_EVENTS}
-            WHERE user_id = f.user_id
-        )
-        GROUP BY f.user_id
+            user_id,
+            array_agg(txt ORDER BY ord, c) as event_texts
+        FROM (
+            SELECT f.user_id, m.text AS txt, 0 AS ord, m.created_at AS c
+            FROM {Tables.FAVORITES} f
+            JOIN {Tables.MESSAGES} m ON m.surrogate_id = f.msg_id
+            WHERE m.date = $1
+            AND m.surrogate_id NOT IN (
+                SELECT msg_id FROM {Tables.HIDDEN_EVENTS}
+                WHERE user_id = f.user_id
+            )
+            UNION ALL
+            SELECT ef.user_id,
+                   e.title || COALESCE(' — ' || NULLIF(e.venue, ''), ''),
+                   1, e.created_at
+            FROM {Tables.EVENT_FAVORITES} ef
+            JOIN {Tables.EVENTS} e ON e.id = ef.event_id
+            WHERE e.starts_at = $1
+            AND e.id NOT IN (
+                SELECT event_id FROM {Tables.EVENT_HIDDEN}
+                WHERE user_id = ef.user_id
+            )
+        ) u
+        GROUP BY user_id
         """,
         today
     )

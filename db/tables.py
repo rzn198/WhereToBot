@@ -9,3 +9,5 @@ class Tables:
     CINEMA_EVENTS         = 'cinema_events'
     CINEMA_DESCRIPTIONS   = 'cinema_descriptions'
     EVENTS                = 'events'
+    EVENT_FAVORITES       = 'event_favorites'
+    EVENT_HIDDEN          = 'event_hidden'

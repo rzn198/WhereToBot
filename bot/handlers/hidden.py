@@ -4,6 +4,7 @@ from telegram.ext import ContextTypes
 from db.tables import Tables
 from bot.handlers.start import show_main_menu
 from bot.handlers.events import show_current_event
+from bot.utils.refs import is_event_ref, parse_ref, ref_id
 
 
 async def handle_hide(
@@ -18,21 +19,25 @@ async def handle_hide(
     data = query.data
 
     parts = data.split(':')
-    if len(parts) != 2 or not parts[1].isdigit():
+    ref = parse_ref(parts[1]) if len(parts) == 2 else None
+    if ref is None:
         await query.answer('Неверный запрос', show_alert=True)
         return
 
-    surrogate_id = int(parts[1])
+    table, column = (
+        (Tables.EVENT_HIDDEN, 'event_id') if is_event_ref(ref)
+        else (Tables.HIDDEN_EVENTS, 'msg_id')
+    )
 
     try:
         await pool.execute(f"""
-            INSERT INTO {Tables.HIDDEN_EVENTS} (user_id, msg_id)
+            INSERT INTO {table} (user_id, {column})
             VALUES ($1, $2)
             ON CONFLICT DO NOTHING
-        """, user_id, surrogate_id)
+        """, user_id, ref_id(ref))
 
         logger.info(
-            f"HIDE | user_id={user_id} | surrogate_id={surrogate_id}"
+            f"HIDE | user_id={user_id} | ref={ref}"
         )
     except Exception as e:
         logger.error(f"HIDE error: {e}")
@@ -42,8 +47,8 @@ async def handle_hide(
     event_ids = context.user_data.get('event_ids', [])
     current_index = context.user_data.get('current_index', 0)
 
-    if surrogate_id in event_ids:
-        event_ids.remove(surrogate_id)
+    if ref in event_ids:
+        event_ids.remove(ref)
         context.user_data['event_ids'] = event_ids
 
         if current_index >= len(event_ids):

@@ -5,6 +5,7 @@ from telegram.ext import ContextTypes
 
 from db.tables import Tables
 from bot.handlers.contact import _edit_contact_window
+from bot.handlers.events import EVENTS_CITY
 
 MONTHS_RU = [
     '', 'Январь', 'Февраль', 'Март', 'Апрель', 'Май', 'Июнь',
@@ -127,15 +128,24 @@ async def _show_calendar(
     year = context.user_data.get('calendar_year', date.today().year)
     month = context.user_data.get('calendar_month', date.today().month)
 
+    # дни, в которые есть посты каналов или события сайтов (Белград)
     row = await pool.fetchrow(f"""
             SELECT
-                array_agg(DISTINCT date) as dates,
-                MAX(date) as max_date
-            FROM {Tables.MESSAGES}
-            WHERE date IS NOT NULL
-            AND date >= CURRENT_DATE
-            AND hidden_by_admin = FALSE
-        """)
+                array_agg(DISTINCT d) as dates,
+                MAX(d) as max_date
+            FROM (
+                SELECT date AS d
+                FROM {Tables.MESSAGES}
+                WHERE date IS NOT NULL
+                AND date >= CURRENT_DATE
+                AND hidden_by_admin = FALSE
+                UNION ALL
+                SELECT starts_at
+                FROM {Tables.EVENTS}
+                WHERE starts_at >= CURRENT_DATE
+                AND city = $1
+            ) t
+        """, EVENTS_CITY)
     dates_with_events = set(row['dates'] or [])
     max_date = row['max_date'] if row and row['max_date'] else date.today()
 
