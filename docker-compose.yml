@@ -33,6 +33,17 @@ services:
       db:
         condition: service_healthy
 
+  event_collector:
+    build: .
+    command: python -m event_collector.main
+    restart: always
+    env_file: .env
+    volumes:
+      - logs:/app/logs
+    depends_on:
+      db:
+        condition: service_healthy
+
   db:
     image: postgres:16-alpine
     restart: always
