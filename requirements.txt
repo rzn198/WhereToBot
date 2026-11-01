@@ -26,4 +26,4 @@ requests>=2.34.0
 beautifulsoup4>=4.14.0
 
 httpx
-selectolax
+selectolax==0.3.29   # HTML-парсер скраперов event_collector (API selectolax.parser убран в 1.0)
