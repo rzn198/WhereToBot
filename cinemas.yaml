@@ -32,7 +32,8 @@ cinemas:
     - name: "CineGrand MCF"
       maps_url: "https://maps.app.goo.gl/b2PQuZ77mZDBmQSMA"
       url: "https://cinegrand-mcf.rs"
-      location_id: 1
+      api_url: "https://api.cinegrand-mcf.rs/api/v2"   # API сайта; при смене адреса правится только здесь
+      location_id: 1                                   # Cine Grand Delta Planet (список: GET {api_url}/locations)
       description: "хз"
 
   cinestar:
