@@ -72,7 +72,12 @@ async def init():
         logger.info("schema.sql applied successfully")
     except asyncpg.PostgresError as e:
         if 'already exists' in str(e):
-            logger.info("Tables already exist — schema is up to date")
+            # schema.sql выполняется одним запросом и на первой же существующей таблице
+            # откатывается целиком: в уже созданную базу он ничего не добавляет.
+            logger.warning(
+                "Tables already exist — schema.sql НЕ применялась. "
+                "Чтобы довести существующую базу до актуальной схемы: python -m db.migrate"
+            )
         else:
             logger.error(f"Schema error: {e}")
             sys.exit(1)
