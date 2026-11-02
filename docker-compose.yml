@@ -1,4 +1,16 @@
 services:
+  # Применяет новые SQL-миграции (migrations/*.sql) перед запуском остальных сервисов.
+  # Если миграция упала, остальные контейнеры не стартуют/не пересоздаются (старые продолжают
+  # работать со старой схемой), а `docker compose up` завершается с ошибкой.
+  migrate:
+    build: .
+    command: python -m db.migrate
+    restart: "no"
+    env_file: .env
+    depends_on:
+      db:
+        condition: service_healthy
+
   bot:
     build: .
     command: python -m bot.main
@@ -9,6 +21,8 @@ services:
     depends_on:
       db:
         condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
 
   collector:
     build: .
@@ -21,6 +35,8 @@ services:
     depends_on:
       db:
         condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
 
   cinema_collector:
     build: .
@@ -32,6 +48,8 @@ services:
     depends_on:
       db:
         condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
 
   event_collector:
     build: .
@@ -43,6 +61,8 @@ services:
     depends_on:
       db:
         condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
 
   db:
     image: postgres:16-alpine
