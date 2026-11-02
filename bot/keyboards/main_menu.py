@@ -14,7 +14,10 @@ def get_main_menu_inline(is_admin: bool = False) -> InlineKeyboardMarkup:
             InlineKeyboardButton('📅 На дату', callback_data='filter:calendar'),
         ],
         [
-            InlineKeyboardButton('⭐ Избранное',          callback_data='filter:favorites'),
+            InlineKeyboardButton('🗂 По категориям', callback_data='cats:menu')
+        ],
+        [
+            InlineKeyboardButton('⭐ Избранное', callback_data='filter:favorites')
         ],
         [
             InlineKeyboardButton('🎬 Киноафиша', callback_data='cinema:menu'),

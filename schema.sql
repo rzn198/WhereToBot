@@ -12,6 +12,7 @@ CREATE TABLE messages (
     storage_message_id  BIGINT,
     hidden_by_admin     BOOLEAN       NOT NULL DEFAULT FALSE,
     duplicate_of        BIGINT        REFERENCES messages(surrogate_id),
+    event_types         TEXT[]        NOT NULL DEFAULT '{}',
 
     CONSTRAINT uq_messages_channel_id_position UNIQUE (channel_id, id, position)
 );
@@ -19,6 +20,7 @@ CREATE TABLE messages (
 CREATE INDEX idx_messages_date_created    ON messages (date, created_at);
 CREATE INDEX idx_messages_channel         ON messages (channel_id);
 CREATE INDEX idx_messages_published_at    ON messages (published_at);
+CREATE INDEX idx_messages_event_types     ON messages USING gin (event_types);
 
 CREATE TABLE favorites (
     user_id     BIGINT        NOT NULL,
@@ -160,3 +162,26 @@ CREATE INDEX IF NOT EXISTS idx_events_image_file_id_null
     ON public.events USING btree (id) WHERE image_file_id IS NULL;
 CREATE INDEX IF NOT EXISTS idx_events_description_ru_null
     ON public.events USING btree (id) WHERE description_ru IS NULL;
+
+CREATE TABLE IF NOT EXISTS event_favorites (
+    user_id   BIGINT       NOT NULL,
+    event_id  BIGINT       NOT NULL REFERENCES events (id) ON DELETE CASCADE,
+    added_at  TIMESTAMPTZ  NOT NULL DEFAULT now(),
+    CONSTRAINT pk_event_favorites PRIMARY KEY (user_id, event_id)
+);
+CREATE INDEX IF NOT EXISTS idx_event_favorites_event ON event_favorites (event_id);
+
+CREATE TABLE IF NOT EXISTS event_hidden (
+    user_id   BIGINT  NOT NULL,
+    event_id  BIGINT  NOT NULL REFERENCES events (id) ON DELETE CASCADE,
+    CONSTRAINT pk_event_hidden PRIMARY KEY (user_id, event_id)
+);
+CREATE INDEX IF NOT EXISTS idx_event_hidden_event ON event_hidden (event_id);
+
+-- Покрывающие индексы для единой ленты (см. migrations/006_feed_covering_indexes.sql)
+CREATE INDEX IF NOT EXISTS idx_events_city_starts_cov
+    ON events (city, starts_at) INCLUDE (id, created_at);
+
+CREATE INDEX IF NOT EXISTS idx_messages_date_cov
+    ON messages (date) INCLUDE (surrogate_id, created_at)
+    WHERE hidden_by_admin = FALSE;
