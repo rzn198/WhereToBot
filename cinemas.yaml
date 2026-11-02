@@ -53,4 +53,6 @@ cinemas:
     - name: "MTS Dvorana"
       maps_url: "https://maps.app.goo.gl/jpo7wBbwYowVYxiR7"
       url: "https://www.mtsdvorana.rs"
+      api_url: "https://api.mtsdvorana.rs/api/v2"
+      location_id: 10                                  # «mts Dvorana» (id 8 «Web prodaja» — не зал)
       description: "хз"

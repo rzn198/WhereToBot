@@ -4,6 +4,7 @@ from loguru import logger
 from bs4 import BeautifulSoup
 from zoneinfo import ZoneInfo
 
+from cinema_collector.scrapers.cache import cached_fetch
 from cinema_collector.scrapers.base import BaseScraper, CinemaEvent, http_get_with_retry
 from shared.constants import MOVIE_DESC_SHORT_COLLECT_LENGTH, MOVIE_DESC_FULL_COLLECT_LENGTH
 
@@ -149,7 +150,9 @@ class CineStarScraper(BaseScraper):
 
         if movie_url and movie_url not in self._detail_cache:
             logger.debug(f"CINESTAR_DETAIL_FETCH | {movie_url}")
-            self._detail_cache[movie_url] = _fetch_movie_detail(movie_url)
+            self._detail_cache[movie_url] = cached_fetch(
+                'cinestar', movie_url, lambda: _fetch_movie_detail(movie_url),
+                ok=lambda d: bool(d.get('movie_title') or d.get('movie_description_full')))
 
         detail = self._detail_cache.get(movie_url, {})
 

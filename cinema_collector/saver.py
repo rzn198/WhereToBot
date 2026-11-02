@@ -73,78 +73,87 @@ async def upload_poster(bot: Bot, photo_bytes: bytes, title: str) -> tuple[str, 
         return None, None
 
 
+INSERT_SQL = f"""
+    INSERT INTO {Tables.CINEMA_EVENTS} (
+        cinema_name, cinema_maps_url, cinema_url,
+        movie_id, movie_title, movie_title_serbian,
+        movie_title_normalized,
+        movie_genre, movie_description_short, movie_description_full,
+        movie_poster_url, movie_poster_file_id, movie_poster_msg_id,
+        showtime, ticket_url, source
+    ) VALUES (
+        $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16
+    )
+"""
+
+
+async def _poster_for(bot, event, poster_cache):
+    """file_id постера в Telegram (скачивание и загрузка — только если передан bot)."""
+    if not (bot and event.movie_poster_url):
+        return None, None
+    if event.movie_poster_url in poster_cache:
+        return poster_cache[event.movie_poster_url]
+    photo_bytes = await download_poster(event.movie_poster_url)
+    if not photo_bytes:
+        return None, None
+    file_id, msg_id = await upload_poster(bot, photo_bytes, event.movie_title)
+    if file_id:
+        poster_cache[event.movie_poster_url] = (file_id, msg_id)
+    await asyncio.sleep(SEND_DELAY)
+    return file_id, msg_id
+
+
 async def save_events(
     pool,
     events: list[CinemaEvent],
     bot: Bot | None = None,
 ) -> int:
+    """Заменить все сеансы источника на новые.
+
+    Удаление и вставка идут одной транзакцией: бот до COMMIT видит прежнюю афишу целиком,
+    а не пустую или недозагруженную. Если вставка не удалась — откат, старые данные целы,
+    возвращается 0 (health-монитор сообщит админу).
+    """
     if not events:
         return 0
 
     source = events[0].source
 
-    deleted = await pool.execute(f"""
-        DELETE FROM {Tables.CINEMA_EVENTS}
-        WHERE source = $1
-    """, source)
-    logger.info(f"CINEMA_CLEANUP | source={source} | deleted={deleted}")
-
     poster_cache: dict[str, tuple[str, int]] = {}
-
-    saved = 0
+    rows = []
     for event in events:
-        poster_file_id = None
-        poster_msg_id = None
-
-        if bot and event.movie_poster_url:
-            if event.movie_poster_url in poster_cache:
-                poster_file_id, poster_msg_id = poster_cache[event.movie_poster_url]
-            else:
-                photo_bytes = await download_poster(event.movie_poster_url)
-                if photo_bytes:
-                    poster_file_id, poster_msg_id = await upload_poster(
-                        bot, photo_bytes, event.movie_title
-                    )
-                    if poster_file_id:
-                        poster_cache[event.movie_poster_url] = (poster_file_id, poster_msg_id)
-                    await asyncio.sleep(SEND_DELAY)
-
+        poster_file_id, poster_msg_id = await _poster_for(bot, event, poster_cache)
         serbian = event.movie_title_serbian or event.movie_title
-        movie_title_normalized = normalize_title(serbian)
+        rows.append((
+            event.cinema_name,
+            event.cinema_maps_url,
+            event.cinema_url,
+            event.movie_id,
+            event.movie_title,
+            event.movie_title_serbian,
+            normalize_title(serbian),
+            event.movie_genre,
+            event.movie_description_short,
+            event.movie_description_full,
+            event.movie_poster_url,
+            poster_file_id,
+            poster_msg_id,
+            event.showtime,
+            event.ticket_url,
+            event.source,
+        ))
 
-        try:
-            await pool.execute(f"""
-                INSERT INTO {Tables.CINEMA_EVENTS} (
-                    cinema_name, cinema_maps_url, cinema_url,
-                    movie_id, movie_title, movie_title_serbian,
-                    movie_title_normalized,
-                    movie_genre, movie_description_short, movie_description_full,
-                    movie_poster_url, movie_poster_file_id, movie_poster_msg_id,
-                    showtime, ticket_url, source
-                ) VALUES (
-                    $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16
-                )
-            """,
-                event.cinema_name,
-                event.cinema_maps_url,
-                event.cinema_url,
-                event.movie_id,
-                event.movie_title,
-                event.movie_title_serbian,
-                movie_title_normalized,
-                event.movie_genre,
-                event.movie_description_short,
-                event.movie_description_full,
-                event.movie_poster_url,
-                poster_file_id,
-                poster_msg_id,
-                event.showtime,
-                event.ticket_url,
-                event.source,
-            )
-            saved += 1
-        except Exception as e:
-            logger.error(f"CINEMA_SAVE_ERROR | {event.movie_title} | {e}")
+    try:
+        async with pool.acquire() as conn:
+            async with conn.transaction():
+                deleted = await conn.execute(
+                    f"DELETE FROM {Tables.CINEMA_EVENTS} WHERE source = $1", source)
+                await conn.executemany(INSERT_SQL, rows)
+    except Exception as e:
+        logger.error(f"CINEMA_SAVE_ERROR | source={source} | rows={len(rows)} | {type(e).__name__}: {e} | "
+                     f"откат, прежние данные сохранены")
+        return 0
 
-    logger.info(f"CINEMA_SAVED | source={source} | saved={saved}")
-    return saved
+    logger.info(f"CINEMA_CLEANUP | source={source} | deleted={deleted}")
+    logger.info(f"CINEMA_SAVED | source={source} | saved={len(rows)}")
+    return len(rows)

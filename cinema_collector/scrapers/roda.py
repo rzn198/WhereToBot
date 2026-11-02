@@ -4,6 +4,7 @@ from loguru import logger
 from bs4 import BeautifulSoup
 from zoneinfo import ZoneInfo
 
+from cinema_collector.scrapers.cache import cached_fetch
 from cinema_collector.scrapers.base import BaseScraper, CinemaEvent, http_get_with_retry
 from shared.constants import MOVIE_DESC_SHORT_COLLECT_LENGTH, MOVIE_DESC_FULL_COLLECT_LENGTH
 
@@ -167,7 +168,7 @@ class RodaScraper(BaseScraper):
 
         if movie_url and movie_url not in self._desc_cache:
             logger.debug(f"RODA_DETAIL_FETCH | {movie_url}")
-            self._desc_cache[movie_url] = _fetch_movie_detail(movie_url)
+            self._desc_cache[movie_url] = cached_fetch('roda', movie_url, lambda: _fetch_movie_detail(movie_url))
 
         description_full = self._desc_cache.get(movie_url, '')
         description_short = description_full[:MOVIE_DESC_SHORT_COLLECT_LENGTH] if description_full else ''
