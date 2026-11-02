@@ -4,6 +4,7 @@ from loguru import logger
 from bs4 import BeautifulSoup
 from zoneinfo import ZoneInfo
 
+from cinema_collector.scrapers.cache import cached_fetch
 from cinema_collector.scrapers.base import BaseScraper, CinemaEvent, http_get_with_retry
 from shared.constants import MOVIE_DESC_SHORT_COLLECT_LENGTH, MOVIE_DESC_FULL_COLLECT_LENGTH
 
@@ -149,7 +150,9 @@ class TuckwoodScraper(BaseScraper):
         if movie_url:
             if movie_url not in self._desc_cache:
                 logger.debug(f"TUCKWOOD_DESC_FETCH | {movie_url}")
-                self._desc_cache[movie_url] = _fetch_description(movie_url)
+                self._desc_cache[movie_url] = cached_fetch(
+                    'tuckwood', movie_url, lambda: _fetch_description(movie_url),
+                    ok=lambda d: bool(d[0] or d[1]))
             desc_short, desc_full = self._desc_cache[movie_url]
         else:
             desc_short, desc_full = '', ''
