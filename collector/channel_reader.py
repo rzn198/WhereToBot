@@ -1,5 +1,6 @@
 import json
 import asyncpg
+from dataclasses import replace
 from datetime import date, datetime, timedelta, timezone
 from loguru import logger
 from telegram.error import TelegramError
@@ -9,7 +10,9 @@ from telethon.tl.types import Message
 
 from collector.parsers.zarko_tusic import ZarkoTusicParser
 from collector.parsers.running_beg import RunningBegParser
+from collector.ai.service import ai_service
 from collector.categorizer_v2 import categorize
+from shared.categories import normalize_categories
 from shared.config import config
 from db.tables import Tables
 from collector.parsers.base import ParsedEvent
@@ -108,7 +111,9 @@ async def fetch_new_messages(
         published_at = message.date.replace(tzinfo=timezone.utc)
 
         for event in events:
-            if retention is not None and _is_expired(
+            # AI определяет дату → «просрочено?» проверяем после ответа AI, иначе до (дешевле)
+            ai_dates = ai_service.decides_date(channel)
+            if not ai_dates and retention is not None and _is_expired(
                 event.date, published_at, now, *retention,
             ):
                 skipped_expired += 1
@@ -121,6 +126,22 @@ async def fetch_new_messages(
                     channel_id = 0
 
                 event_types = categorize(event.text, channel, position=event.position)
+
+                if ai_service.needs_ai(event.text, channel, event.position):
+                    # уже сохранённые посты не отправляем в AI повторно (платные запросы)
+                    if await _already_saved(pool, channel_id, message.id, event.position):
+                        continue
+                    new_date, event_types = await ai_service.resolve(
+                        text=event.text, channel=channel, position=event.position,
+                        published_at=published_at.date(), regex_date=event.date,
+                        dict_types=event_types,
+                    )
+                    event = replace(event, date=new_date)
+                    if ai_dates and retention is not None and _is_expired(
+                        event.date, published_at, now, *retention,
+                    ):
+                        skipped_expired += 1
+                        continue
 
                 surrogate_id = await _save_event(
                     pool, message, channel, event,
@@ -166,6 +187,14 @@ async def fetch_new_messages(
     return saved
 
 
+async def _already_saved(pool: asyncpg.Pool, channel_id: int, message_id: int, position: int) -> bool:
+    row = await pool.fetchval(
+        f"SELECT 1 FROM {Tables.MESSAGES} WHERE channel_id = $1 AND id = $2 AND position = $3",
+        channel_id, message_id, position,
+    )
+    return row is not None
+
+
 async def _save_event(
     pool: asyncpg.Pool,
     message: Message,
@@ -200,7 +229,7 @@ async def _save_event(
         published_at,
         event.photo_file_id,
         event.storage_message_id,
-        event_types or [],
+        normalize_categories(event_types),
     )
 
     return result['surrogate_id'] if result is not None else None

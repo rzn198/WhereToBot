@@ -4,6 +4,7 @@ from loguru import logger
 from telethon import TelegramClient
 
 from shared.config import config
+from collector.ai.service import ai_service
 from collector.channel_reader import fetch_new_messages
 
 
@@ -17,6 +18,7 @@ async def job_parse_channels(
     logger.info(f"Parse job started | channels={channels}")
 
     total = 0
+    ai_service.begin_run()
     for channel in channels:
         channel = channel.strip()
         if not channel:
@@ -31,6 +33,7 @@ async def job_parse_channels(
         except Exception as e:
             logger.error(f"PARSE_JOB_CHANNEL_ERROR | channel={channel} | {e}")
 
+    await ai_service.end_run()
     logger.info(f"Parse job finished | total_saved={total}")
 
     try:

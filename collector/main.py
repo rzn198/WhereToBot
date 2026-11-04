@@ -16,6 +16,7 @@ from db.connection import init_db_pool, close_db_pool
 from db.validators import validate_config_tables
 from collector.client import build_telethon_client
 from collector.scheduler import start_scheduler
+from collector.ai.service import ai_service
 from collector.channel_reader import fetch_new_messages
 from collector.photo.validator import verify_storage_channel_access
 
@@ -41,6 +42,7 @@ async def main():
     scheduler = start_scheduler(pool, client, bot=bot)
 
     channels = config['telegram']['channels']
+    ai_service.begin_run()
     for channel in channels:
         channel = channel.strip()
         if not channel:
@@ -53,6 +55,7 @@ async def main():
             )
         except Exception as e:
             logger.error(f"INITIAL_FETCH_ERROR | channel={channel} | {e}")
+    await ai_service.end_run()
 
     try:
         await client.run_until_disconnected()

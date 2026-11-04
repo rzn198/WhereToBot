@@ -86,20 +86,16 @@ def _classify(text: str, categories: dict) -> list[str]:
     return [c for s, c in scores if s == top]
 
 
-def categorize(text: str, channel: str, position: int = 0) -> list[str]:
-    """
-    Определяет категории события.
+def category_names() -> list[str]:
+    """Имена категорий из словаря (белый список для AI-категоризации)."""
+    return list((_load_config().get('categories') or {}).keys())
 
-    Возврат: list[str]
-      [0]  — главная категория
-      весь — все подходящие
-      []   — ни к чему не отнесено (в БД: event_type=NULL/'Другое', event_types={})
 
-    Порядок:
-      0. custom parser (position != 0) → [фиксированная]
-      1. fixed_channels → [фиксированная]
-      2. channel keyword override → [переопределённая]
-      3. общий словарь → _classify()
+def categorize_forced(text: str, channel: str, position: int = 0) -> list[str] | None:
+    """Правила, которые назначают категорию напрямую (шаги 0–2).
+
+    None — ни одно правило не сработало, нужен анализ текста. Эти правила AI не
+    переопределяет: канал/парсер однозначно знает категорию.
     """
     config = _load_config()
     channel_normalized = channel if channel.startswith('@') else f'@{channel}'
@@ -132,8 +128,30 @@ def categorize(text: str, channel: str, position: int = 0) -> list[str]:
             )
             return [cat]
 
+    return None
+
+
+def categorize(text: str, channel: str, position: int = 0) -> list[str]:
+    """
+    Определяет категории события.
+
+    Возврат: list[str]
+      [0]  — главная категория
+      весь — все подходящие
+      []   — ни к чему не отнесено (в БД: event_type=NULL/'Другое', event_types={})
+
+    Порядок:
+      0. custom parser (position != 0) → [фиксированная]
+      1. fixed_channels → [фиксированная]
+      2. channel keyword override → [переопределённая]
+      3. общий словарь → _classify()
+    """
+    forced = categorize_forced(text, channel, position)
+    if forced is not None:
+        return forced
+
     # Шаг 3 — общий словарь
-    categories = config.get('categories', {})
+    categories = _load_config().get('categories', {})
     result = _classify_multi(text, categories)
 
     logger.debug(
