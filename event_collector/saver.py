@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from shared.categories import normalize_categories
 from loguru import logger
 
 from event_collector.scrapers.base import EventItem
@@ -106,7 +107,7 @@ async def save_events(pool, items: list[EventItem]) -> int:
                     it.country,
                     _first_image(it.images),
                     it.dedup_key,
-                    it.event_types or [],
+                    normalize_categories(it.event_types),
                 )
                 if row is None:
                     unchanged += 1

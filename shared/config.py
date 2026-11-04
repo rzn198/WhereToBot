@@ -49,6 +49,47 @@ def load_config() -> dict:
         'max_chars': int(yaml_oc.get('max_chars', 600)),
     }
 
+    cfg['parsing'] = _parsing_section(cfg.get('parsing') or {}, cfg['opencode'])
+    cfg['deduplication'] = _dedup_section(cfg.get('deduplication') or {}, cfg['opencode'])
+
     return cfg
+
+
+def _parsing_section(y: dict, oc: dict) -> dict:
+    """AI-парсинг дат и категорий messages. Отдельный ключ: OPENCODE_PARSING_API_KEY."""
+    return {
+        'date_method': (os.getenv('PARSING_DATE_METHOD') or y.get('date_method') or 'regex').strip().lower(),
+        'category_method': (os.getenv('PARSING_CATEGORY_METHOD') or y.get('category_method') or 'dict').strip().lower(),
+        'ai_null_date_fallback': bool(y.get('ai_null_date_fallback', True)),
+        'ai_empty_categories_fallback': bool(y.get('ai_empty_categories_fallback', True)),
+        'ai_trust_non_event': bool(y.get('ai_trust_non_event', False)),
+        'max_chars': int(y.get('max_chars', 2000)),
+        'max_calls_per_run': int(y.get('max_calls_per_run', 1000)),
+        'timeout': float(y.get('timeout', 60)),
+        'temperature': (float(y['temperature']) if y.get('temperature') is not None else None),
+        'base_url': y.get('base_url') or oc['base_url'],
+        'models': list(y.get('models') or []),
+        'api_key': os.getenv('OPENCODE_PARSING_API_KEY', ''),
+    }
+
+
+def _dedup_section(y: dict, oc: dict) -> dict:
+    """Прежние ключи секции (flag_threshold) сохраняются; AI-дедуп — в подсекции `ai`.
+    Отдельный ключ: OPENCODE_DEDUP_API_KEY."""
+    ai = y.get('ai') or {}
+    prio = ai.get('priority') or {}
+    out = dict(y)
+    out['ai'] = {
+        'base_url': ai.get('base_url') or oc['base_url'],
+        'models': list(ai.get('models') or []),
+        'api_key': os.getenv('OPENCODE_DEDUP_API_KEY', ''),
+        'timeout': float(ai.get('timeout', 120)),
+        'priority': {
+            'messages': list(prio.get('messages') or []),
+            'events': list(prio.get('events') or []),
+        },
+    }
+    return out
+
 
 config = load_config()
