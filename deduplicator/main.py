@@ -11,6 +11,7 @@ os.environ.setdefault('APP_ENV', 'production')
 from loguru import logger
 
 from deduplicator import notify
+from deduplicator.audit import audit_from_cfg
 from deduplicator.runner import run_dedup
 from deduplicator.schedule import ServiceSettings, close_interrupted_runs, decide, load_snapshot, service_settings
 from shared.ai import client_from_config
@@ -63,6 +64,9 @@ async def main():
         logger.warning(f"DEDUP_INTERRUPTED_RUNS_CLOSED | rows={closed}")
     if cfg['method'] not in ('shadow', 'ai'):
         logger.warning("DEDUP_SERVICE_IDLE | deduplication.method=legacy: сервис простаивает (включи shadow или ai и перезапусти)")
+    aud = audit_from_cfg(cfg)
+    logger.info(f"Dedup audit log | enabled={aud.enabled}" + (f" | file={aud.path} | rotation={cfg['audit']['rotation_mb']}MB"
+                f" | retention={cfg['audit']['retention_days']}d" if aud.enabled else " (deduplication.audit.enabled=false)"))
     client = client_from_config('dedup', cfg['ai'])
     try:
         while True:

@@ -82,6 +82,12 @@ parsing:
     - gpt-6-luna
 
 deduplication:
+  audit:
+    enabled: true          # false — журнал не пишется вообще
+    max_text_chars: 4000
+    rotation_mb: 50
+    retention_days: 90
+    raw_answers: true
   method: shadow
   ai:
     models: [deepseek-v4.1-flash, gpt-6-luna, glm-5.3-flash, beam-free]

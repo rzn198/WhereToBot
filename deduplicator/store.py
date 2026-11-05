@@ -26,17 +26,17 @@ async def load_channel_names(pool: asyncpg.Pool) -> dict[int, str]:
 async def load_records(pool: asyncpg.Pool, start: date, end: date) -> list[Record]:
     out: list[Record] = []
     for r in await pool.fetch(
-            f"SELECT surrogate_id, channel_id, position, text, date, created_at, hidden_by_admin "
+            f"SELECT surrogate_id, id, channel_id, position, text, date, created_at, hidden_by_admin "
             f"FROM {Tables.MESSAGES} WHERE date BETWEEN $1 AND $2 AND text <> ''", start, end):
         out.append(Record(kind=KIND_MESSAGE, id=r['surrogate_id'], day=r['date'], source=f"ch:{r['channel_id']}",
                           text=r['text'], hidden=r['hidden_by_admin'], position=r['position'] or 0,
-                          created_at=r['created_at']))
+                          created_at=r['created_at'], tg_id=r['id']))
     for r in await pool.fetch(
-            f"SELECT id, source, title, description, description_ru, venue, city, starts_at, created_at, hidden_by_admin "
+            f"SELECT id, source, source_url, title, description, description_ru, venue, city, starts_at, created_at, hidden_by_admin "
             f"FROM {Tables.EVENTS} WHERE starts_at BETWEEN $1 AND $2", start, end):
         out.append(Record(kind=KIND_EVENT, id=r['id'], day=r['starts_at'], source=f"event:{(r['source'] or '').lower()}",
                           text=_event_text(r), hidden=r['hidden_by_admin'], created_at=r['created_at'],
-                          city=r['city']))
+                          city=r['city'], url=r['source_url']))
     return out
 
 
@@ -49,6 +49,19 @@ async def load_live(pool: asyncpg.Pool, start: date, end: date) -> dict[date, li
         by_day.setdefault(r['day'], []).append(Live(
             id=r['id'], loser=(r['loser_kind'], r['loser_id']), winner=(r['winner_kind'], r['winner_id']),
             status=r['status'], decided_by=r['decided_by'], reason=r['reason'] or ''))
+    return by_day
+
+
+async def load_day_decisions(pool: asyncpg.Pool, days: list[date]) -> dict[date, list[dict]]:
+    """Решения (proposed/active/reverted) по датам: для журнала — что менялось относительно прошлого прогона."""
+    by_day: dict[date, list[dict]] = {}
+    if not days:
+        return by_day
+    for r in await pool.fetch(
+            f"SELECT day, winner_kind, winner_id, loser_kind, loser_id, status, decided_by, model, reason "
+            f"FROM {Tables.DEDUP_DECISIONS} WHERE day = ANY($1::date[]) AND status IN ('proposed', 'active', 'reverted')",
+            days):
+        by_day.setdefault(r['day'], []).append(dict(r))
     return by_day
 
 

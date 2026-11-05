@@ -36,6 +36,8 @@ class Groups(list):
         super().__init__(items)
         self.lists: set = set(lists)
         self.weak: set = set(weak)
+        self.raw: list[str] = []          # сырые ответы модели (по частям): для журнала
+        self.models: list[str] = []       # модель, ответившая на каждую часть
 
 
 def _one_line(text: str, limit: int) -> str:
