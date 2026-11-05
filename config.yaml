@@ -82,10 +82,22 @@ parsing:
     - gpt-6-luna
 
 deduplication:
-  flag_threshold: 0.7
+  method: shadow
   ai:
-    models:
-      - "beam"
+    models: [deepseek-v4.1-flash, gpt-6-luna, glm-5.3-flash, beam-free]
     priority:
-      messages: []
-      events: []
+      - ch:1765919452   # @vstrechi_v_belgrade
+      - ch:1530279711   # @sta_imas_beograd
+      - ch:2195736208   # @free_belgrade
+      - ch:1641980450   # @zarko_tusic
+      - ch:1644390566   # @standup_beo
+      - ch:1919577389   # @obitaniya_sreda
+      - ch:1869378987   # @afisha_rs
+      - ch:1855294969   # @soroka_beloboka_rs
+      - event:efinityrs
+      - event:biletrs
+      - event:polako
+      - event:ticketsrs
+      - event:gigstix
+      - event:ticrs
+      - event:balkan-promo

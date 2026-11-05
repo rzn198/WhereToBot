@@ -73,21 +73,40 @@ def _parsing_section(y: dict, oc: dict) -> dict:
     }
 
 
+DEDUP_METHODS = ('legacy', 'shadow', 'ai')
+
+
+def _dedup_priority(raw) -> list[str]:
+    """Единый список источников сверху вниз. Прежняя форма {messages: [...], events: [...]} тоже принимается."""
+    if isinstance(raw, dict):
+        return [str(x) for x in (raw.get('messages') or [])] + \
+               [x if str(x).startswith('event:') else f"event:{x}" for x in (raw.get('events') or [])]
+    return [str(x) for x in (raw or [])]
+
+
 def _dedup_section(y: dict, oc: dict) -> dict:
     """Прежние ключи секции (flag_threshold) сохраняются; AI-дедуп — в подсекции `ai`.
+    method: legacy (старый хук) | shadow (AI предлагает, ничего не скрывается) | ai (AI скрывает дубли).
     Отдельный ключ: OPENCODE_DEDUP_API_KEY."""
     ai = y.get('ai') or {}
-    prio = ai.get('priority') or {}
     out = dict(y)
+    method = (os.getenv('DEDUP_METHOD') or y.get('method') or 'legacy').strip().lower()
+    if method not in DEDUP_METHODS:
+        method = 'legacy'
+    out['method'] = method
     out['ai'] = {
         'base_url': ai.get('base_url') or oc['base_url'],
         'models': list(ai.get('models') or []),
         'api_key': os.getenv('OPENCODE_DEDUP_API_KEY', ''),
         'timeout': float(ai.get('timeout', 120)),
-        'priority': {
-            'messages': list(prio.get('messages') or []),
-            'events': list(prio.get('events') or []),
-        },
+        'extra_payload': dict(ai.get('extra_payload') or {}),
+        'cooldown_seconds': float(ai.get('cooldown_seconds', 300)),
+        'priority': _dedup_priority(ai.get('priority')),
+        'max_records_per_request': int(ai.get('max_records_per_request', 80)),
+        'max_chars_per_record': int(ai.get('max_chars_per_record', 300)),
+        'concurrency': int(ai.get('concurrency', 3)),
+        'max_requests_per_run': int(ai.get('max_requests_per_run', 300)),
+        'horizon_days': int(ai.get('horizon_days', 365)),
     }
     return out
 

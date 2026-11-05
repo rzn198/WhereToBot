@@ -96,6 +96,8 @@ async def fetch_new_messages(
         logger.error(f"Network error fetching {channel}: {e}")
         return 0
 
+    await _register_channel(pool, entity)
+
     for message in messages:
         if not isinstance(message, Message) or not message.message:
             continue
@@ -185,6 +187,23 @@ async def fetch_new_messages(
         f"(skipped_expired={skipped_expired})"
     )
     return saved
+
+
+async def _register_channel(pool: asyncpg.Pool, entity) -> None:
+    """Запоминаем числовой id и @username канала: иерархию дедупликатора задают по имени. Best-effort."""
+    try:
+        cid = getattr(entity, 'id', None)
+        if not isinstance(cid, int) or isinstance(cid, bool):
+            return
+        username = getattr(entity, 'username', None)
+        title = getattr(entity, 'title', None)
+        await pool.execute(
+            f"INSERT INTO {Tables.CHANNELS} (channel_id, username, title) VALUES ($1, $2, $3) "
+            f"ON CONFLICT (channel_id) DO UPDATE SET username = EXCLUDED.username, title = EXCLUDED.title, "
+            f"updated_at = now()",
+            abs(cid), username if isinstance(username, str) else None, title if isinstance(title, str) else None)
+    except Exception as e:
+        logger.debug(f"CHANNEL_REGISTER_SKIPPED | {type(e).__name__}: {e}")
 
 
 async def _already_saved(pool: asyncpg.Pool, channel_id: int, message_id: int, position: int) -> bool:
