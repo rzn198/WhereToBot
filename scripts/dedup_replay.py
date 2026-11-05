@@ -31,7 +31,7 @@ os.environ.setdefault('APP_ENV', 'local')
 
 from db.tables import Tables  # noqa: E402
 from deduplicator import runner  # noqa: E402
-from deduplicator.engine import DayPlan, eligible  # noqa: E402
+from deduplicator.engine import DayPlan, order_group  # noqa: E402
 from deduplicator.priority import PriorityResolver  # noqa: E402
 from shared.ai import client_from_config  # noqa: E402
 
@@ -45,11 +45,13 @@ def cluster_rows(plans: list[DayPlan], resolver: PriorityResolver, legacy: dict,
         losers = {nd.loser.key for nd in plan.wanted}
         for gi, g in enumerate(plan.groups, 1):
             members = sorted(g.members, key=resolver.rank)
-            ok = eligible(members, plan.lists)
-            if len({m.source for m in ok}) < 2:
+            winner, rest = order_group(members, plan.lists, plan.weak, resolver)
+            if winner is None or not any(m.source != winner.source for m in rest):
                 continue
-            winner = ok[0]
-            for m in [winner] + [x for x in members if x.key != winner.key]:     # победитель всегда первым
+            skipped = [x for x in members if x.key != winner.key and x.key not in {y.key for y in rest}]
+            extra = [nd.loser for nd in plan.wanted if nd.winner.key == winner.key
+                     and nd.loser.key not in {y.key for y in members}]            # точные копии, добавленные движком
+            for m in [winner] + rest + skipped + extra:                           # победитель всегда первым
                 if m.key == winner.key:
                     role = 'winner'
                 elif m.key in losers:

@@ -80,8 +80,11 @@ def candidates(records: list[Record], live: list[Live]) -> list[Record]:
 
 
 def plan_day(day: date, records: list[Record], groups: list[Group], live: list[Live],
-             resolver: PriorityResolver, method: str) -> DayPlan:
-    """records — уже отфильтрованные candidates()."""
+             resolver: PriorityResolver, method: str, hide_exact_copies: bool = True) -> DayPlan:
+    """records — уже отфильтрованные candidates().
+    hide_exact_copies: точные копии постов одного канала (тот же день, тот же текст) скрываются, остаётся лучшая
+    по иерархии; работает и в днях без других источников. События с сайтов не трогаем: у двух сеансов
+    одного события может быть одинаковое описание."""
     ai_lists = set(getattr(groups, 'lists', ()) or ())
     ai_weak = set(getattr(groups, 'weak', ()) or ())
     plan = DayPlan(day=day, method=method, groups=groups, weak=ai_weak,
@@ -122,6 +125,22 @@ def plan_day(day: date, records: list[Record], groups: list[Group], live: list[L
                     or t.source == nd.winner.source):
                 continue
             wanted[t.key] = NewDecision(loser=t, winner=nd.winner, reason=nd.reason or 'точная копия скрытой записи')
+
+    if hide_exact_copies:
+        same_source: dict[tuple, list[Record]] = {}
+        for r in records:
+            if (r.kind == 'm' and not r.is_list and not r.is_digest and r.key not in plan.lists
+                    and len(norm_text(r.text)) >= 20):
+                same_source.setdefault((r.source, norm_text(r.text)), []).append(r)
+        for members in same_source.values():
+            if len(members) < 2 or any(m.key in pinned or m.key in locked for m in members):
+                continue
+            keeper = next((m for m in members if m.key in winners), None) or min(members, key=resolver.rank)
+            if keeper.key in wanted:                 # сам хранитель проиграл другому источнику: копии уже ушли с ним
+                continue
+            for t in members:
+                if t.key != keeper.key and t.key not in wanted and t.key not in winners:
+                    wanted[t.key] = NewDecision(loser=t, winner=keeper, reason='точная копия того же источника')
     plan.wanted = list(wanted.values())
 
     if method != 'ai':

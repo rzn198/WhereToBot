@@ -6,6 +6,7 @@ from telethon import TelegramClient
 from shared.config import config
 from collector.ai.service import ai_service
 from collector.channel_reader import fetch_new_messages
+from shared.run_tracker import track_run
 
 
 async def job_parse_channels(
@@ -18,22 +19,23 @@ async def job_parse_channels(
     logger.info(f"Parse job started | channels={channels}")
 
     total = 0
-    ai_service.begin_run()
-    for channel in channels:
-        channel = channel.strip()
-        if not channel:
-            continue
-        try:
-            saved = await fetch_new_messages(
-                client, channel, pool,
-                bot=bot,
-                photo_enabled=photo_enabled,
-            )
-            total += saved
-        except Exception as e:
-            logger.error(f"PARSE_JOB_CHANNEL_ERROR | channel={channel} | {e}")
+    async with track_run(pool, 'collector'):
+        ai_service.begin_run()
+        for channel in channels:
+            channel = channel.strip()
+            if not channel:
+                continue
+            try:
+                saved = await fetch_new_messages(
+                    client, channel, pool,
+                    bot=bot,
+                    photo_enabled=photo_enabled,
+                )
+                total += saved
+            except Exception as e:
+                logger.error(f"PARSE_JOB_CHANNEL_ERROR | channel={channel} | {e}")
 
-    await ai_service.end_run()
+        await ai_service.end_run()
     logger.info(f"Parse job finished | total_saved={total}")
 
     if (config.get('deduplication') or {}).get('method', 'legacy') == 'ai':
