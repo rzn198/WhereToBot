@@ -40,6 +40,7 @@ class NewDecision:
     loser: Record
     winner: Record
     reason: str = ''
+    via: str = 'ai_group'          # ai_group | exact_copy | same_source (откуда решение: для журнала)
 
 
 @dataclass
@@ -56,6 +57,8 @@ class DayPlan:
     hide: list[Key] = field(default_factory=list)
     unhide: list[Key] = field(default_factory=list)
     kept: int = 0
+    pinned: set = field(default_factory=set)                  # админ вернул проигравшего: AI его больше не скрывает
+    locked: set = field(default_factory=set)                  # решение админа: AI не пересчитывает
 
 
 def eligible(members: list[Record], lists: set) -> list[Record]:
@@ -102,6 +105,7 @@ def plan_day(day: date, records: list[Record], groups: list[Group], live: list[L
     locked = {k for k, d in active.items()
               if d.decided_by == 'admin' and k in recs and d.winner in recs}
 
+    plan.pinned, plan.locked = set(pinned), set(locked)
     wanted: dict[Key, NewDecision] = {}
     winners: set[Key] = set()
     for g in groups:
@@ -124,7 +128,8 @@ def plan_day(day: date, records: list[Record], groups: list[Group], live: list[L
             if (t.key in wanted or t.key in winners or t.key in pinned or t.key in locked
                     or t.source == nd.winner.source):
                 continue
-            wanted[t.key] = NewDecision(loser=t, winner=nd.winner, reason=nd.reason or 'точная копия скрытой записи')
+            wanted[t.key] = NewDecision(loser=t, winner=nd.winner, reason=nd.reason or 'точная копия скрытой записи',
+                                        via='exact_copy')
 
     if hide_exact_copies:
         same_source: dict[tuple, list[Record]] = {}
@@ -140,7 +145,8 @@ def plan_day(day: date, records: list[Record], groups: list[Group], live: list[L
                 continue
             for t in members:
                 if t.key != keeper.key and t.key not in wanted and t.key not in winners:
-                    wanted[t.key] = NewDecision(loser=t, winner=keeper, reason='точная копия того же источника')
+                    wanted[t.key] = NewDecision(loser=t, winner=keeper, reason='точная копия того же источника',
+                                                via='same_source')
     plan.wanted = list(wanted.values())
 
     if method != 'ai':

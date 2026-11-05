@@ -84,6 +84,25 @@ def _dedup_priority(raw) -> list[str]:
     return [str(x) for x in (raw or [])]
 
 
+def _flag(env_value, default: bool) -> bool:
+    """Булев флаг из переменной окружения (1/0, true/false, on/off); пусто — значение из конфига."""
+    if env_value is None or str(env_value).strip() == '':
+        return bool(default)
+    return str(env_value).strip().lower() in ('1', 'true', 'yes', 'on')
+
+
+def _dedup_audit(y: dict) -> dict:
+    """Журнал решений дедупликатора (logs/dedup_audit.jsonl). Выключатель: audit.enabled или DEDUP_AUDIT=0/1."""
+    a = y.get('audit') or {}
+    return {
+        'enabled': _flag(os.getenv('DEDUP_AUDIT'), a.get('enabled', True)),
+        'max_text_chars': int(a.get('max_text_chars', 4000)),
+        'rotation_mb': int(a.get('rotation_mb', 50)),
+        'retention_days': int(a.get('retention_days', 90)),
+        'raw_answers': bool(a.get('raw_answers', True)),
+    }
+
+
 def _dedup_section(y: dict, oc: dict) -> dict:
     """Прежние ключи секции (flag_threshold) сохраняются; AI-дедуп — в подсекции `ai`.
     method: legacy (старый хук) | shadow (AI предлагает, ничего не скрывается) | ai (AI скрывает дубли).
@@ -94,6 +113,7 @@ def _dedup_section(y: dict, oc: dict) -> dict:
     if method not in DEDUP_METHODS:
         method = 'legacy'
     out['method'] = method
+    out['audit'] = _dedup_audit(y)
     out['ai'] = {
         'base_url': ai.get('base_url') or oc['base_url'],
         'models': list(ai.get('models') or []),

@@ -21,6 +21,8 @@ class Record:
     position: int = 0               # messages.position: > 0 — строка дайджеста
     created_at: datetime | None = None
     city: str | None = None
+    tg_id: int | None = None        # номер поста в Telegram-канале (messages.id): для ссылки t.me в журнале
+    url: str | None = None          # events.source_url
 
     @property
     def key(self) -> tuple[str, int]:

@@ -9,6 +9,8 @@ dry_run=True — вообще ничего не пишем в БД (скрипт
 from __future__ import annotations
 
 import asyncio
+import time
+from collections import Counter
 from dataclasses import dataclass, field, replace
 from datetime import date, timedelta
 
@@ -16,6 +18,7 @@ import asyncpg
 from loguru import logger
 
 from deduplicator import store
+from deduplicator.audit import audit_from_cfg
 from deduplicator.engine import DayPlan, Live, candidates, plan_day
 from deduplicator.grouping import (PROMPT_VERSION, SYSTEM_PROMPT, BadGroupingOutput, Groups, build_prompt,
                                    chunk_records, parse_groups)
@@ -67,11 +70,15 @@ async def _ask_day(client: AIClient, recs: list[Record], resolver: PriorityResol
     for chunk in chunk_records(ordered, s['max_records']):
         prompt, index = build_prompt(chunk, labels, s['max_chars'])
         raw = await client.complete(SYSTEM_PROMPT, prompt)
+        model = getattr(client, 'current_model', '') or ''     # модель, давшая этот ответ (после возможного отката)
+        out.raw.append(raw)
+        out.models.append(model)
         try:
             groups = parse_groups(raw, index)
         except BadGroupingOutput as e:
             client.report_bad_output()
             logger.warning(f"DEDUP_BAD_OUTPUT | day={recs[0].day} | {e} | raw={raw[:200]!r}")
+            e.raw, e.model = raw, model                          # для журнала
             raise
         client.report_ok()
         out.lists |= groups.lists
@@ -95,12 +102,16 @@ async def run_dedup(pool: asyncpg.Pool, client: AIClient, cfg: dict, *, method: 
     res = RunResult(stats=dict(dates_total=0, dates_processed=0, requests=0, tokens_in=0, tokens_out=0,
                                groups_found=0, hidden=0, unhidden=0, bad_days=0, skipped_days=0))
     st = res.stats
+    audit = audit_from_cfg(cfg) if not dry_run else audit_from_cfg(None)     # сухой прогон журнал не пишет
+    t_start = time.monotonic()
     client.begin_run()
     if not client.available:
         res.status, res.error = 'skipped', 'AI недоступен: нет ключа/моделей или модели исчерпаны'
         if not dry_run:                              # пропуск тоже фиксируем: по нему сервис считает повторы и сообщает админу
             res.run_id = await store.start_run(pool, method)
             await store.finish_run(pool, res.run_id, 'skipped', res.stats, res.error)
+            audit.log_run_end(run_id=res.run_id, method=method, status='skipped', error=res.error, stats=res.stats,
+                              models_used={}, seconds=time.monotonic() - t_start)
         return res
 
     today = start_date or await pool.fetchval("SELECT CURRENT_DATE")
@@ -139,7 +150,12 @@ async def run_dedup(pool: asyncpg.Pool, client: AIClient, cfg: dict, *, method: 
         if method == 'ai' and not await store.had_ai_run(pool):
             await store.release_legacy_marks(pool)
         res.run_id = await store.start_run(pool, method)
+        audit.log_run_start(run_id=res.run_id, method=method, models=getattr(client, 'models', []) or [],
+                            resolver=resolver, prompt_version=PROMPT_VERSION, dates_total=len(work),
+                            dates_ai=sum(1 for w in work if w[4]),
+                            settings={k: v for k, v in s.items() if k != 'priority'})
 
+    models_used: Counter = Counter()
     stats0 = (client.stats.calls, client.stats.prompt_tokens, client.stats.completion_tokens)
     budget = {'left': s['max_requests']}
     sem = asyncio.Semaphore(s['concurrency'])
@@ -159,25 +175,32 @@ async def run_dedup(pool: asyncpg.Pool, client: AIClient, cfg: dict, *, method: 
                 except AIUnavailable as e:
                     down['cause'] = str(e)
                     return None
-                except BadGroupingOutput:
+                except BadGroupingOutput as e:
                     st['bad_days'] += 1
+                    audit.log_bad_output(run_id=res.run_id, day=cands[0].day.isoformat(), error=e,
+                                         raw=getattr(e, 'raw', ''), model=getattr(e, 'model', ''))
                     return None
                 except Exception as e:                # неожиданный сбой одной даты не должен ронять весь прогон
                     logger.error(f"DEDUP_DAY_ERROR | day={cands[0].day} | {type(e).__name__}: {e}")
+                    audit.log_error('day_error', run_id=res.run_id, day=cands[0].day.isoformat(),
+                                    error=f"{type(e).__name__}: {e}")
                     st['bad_days'] += 1
                     return None
 
         asked = {day: asyncio.ensure_future(ask(day, cands)) for day, cands, _, _, need in work if need}
         await asyncio.gather(*asked.values())
 
-        model = getattr(client, 'current_model', '') or ''
+        prev_decisions = ({} if not audit.enabled or dry_run
+                          else await store.load_day_decisions(pool, [w[0] for w in work]))
         for day, cands, live, fp, need_ai in work:
             if need_ai:
                 groups = asked[day].result()
                 if groups is None:                    # не спрашивали или ответ плохой — дату повторим в следующий раз
                     continue
+                model = (groups.models[-1] if groups.models else '') or getattr(client, 'current_model', '') or ''
             else:
                 groups = Groups()
+                model = 'rules'                       # только правила движка (копии одного источника), AI не спрашивали
             plan = plan_day(day, cands, groups, live, resolver, method, s['hide_exact_copies'])
             res.plans.append(plan)
             st['dates_processed'] += 1
@@ -188,8 +211,12 @@ async def run_dedup(pool: asyncpg.Pool, client: AIClient, cfg: dict, *, method: 
                 try:
                     await store.apply_day(pool, plan, run_id=res.run_id, model=model,
                                           fingerprint=fingerprint(_after_apply(cands, plan), salt))
+                    models_used[model] += 1
+                    audit.log_day(plan, cands, resolver, run_id=res.run_id, model=model, groups=groups,
+                                  asked_ai=need_ai, prev=prev_decisions.get(day))
                 except Exception as e:
                     logger.error(f"DEDUP_APPLY_ERROR | day={day} | {type(e).__name__}: {e}")
+                    audit.log_error('apply_error', run_id=res.run_id, day=day.isoformat(), error=f"{type(e).__name__}: {e}")
                     st['dates_processed'] -= 1
                     st['hidden'] -= len(plan.hide)
                     st['unhidden'] -= len(plan.unhide)
@@ -205,6 +232,9 @@ async def run_dedup(pool: asyncpg.Pool, client: AIClient, cfg: dict, *, method: 
         res.status, res.error = 'skipped', f"AI недоступен: {down['cause']}"
     if not dry_run and res.run_id:
         await store.finish_run(pool, res.run_id, res.status, st, res.error)
+    if not dry_run:
+        audit.log_run_end(run_id=res.run_id, method=method, status=res.status, error=res.error, stats=st,
+                          models_used=dict(models_used), seconds=time.monotonic() - t_start)
     logger.info(f"DEDUP_RUN | method={method} dry={dry_run} status={res.status} " +
                 ' '.join(f"{k}={v}" for k, v in st.items()))
     return res
