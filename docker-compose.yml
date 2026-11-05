@@ -64,6 +64,21 @@ services:
       migrate:
         condition: service_completed_successfully
 
+  # Дедупликатор: ждёт окончания коллекторов и ищет дубли через ИИ (режим deduplication.method: shadow | ai;
+  # при legacy простаивает). Ключ ИИ — OPENCODE_DEDUP_API_KEY.
+  deduplicator:
+    build: .
+    command: python -m deduplicator.main
+    restart: always
+    env_file: .env
+    volumes:
+      - logs:/app/logs
+    depends_on:
+      db:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+
   db:
     image: postgres:16-alpine
     restart: always

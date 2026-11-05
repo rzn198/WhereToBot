@@ -6,6 +6,7 @@ from loguru import logger
 from datetime import date, timedelta
 
 from event_collector import health
+from shared.run_tracker import track_run
 from event_collector.health import RunResult
 from event_collector.saver import save_events
 from event_collector.scrapers.balkan_promo import BalkanPromoScraper
@@ -28,6 +29,11 @@ SCRAPERS = [
 
 
 async def run_all_scrapers(pool) -> int:
+    async with track_run(pool, 'event_collector'):
+        return await _run_all_scrapers(pool)
+
+
+async def _run_all_scrapers(pool) -> int:
 
     logger.info("EVENT_RUN_START")
 

@@ -107,6 +107,7 @@ def _dedup_section(y: dict, oc: dict) -> dict:
         'concurrency': int(ai.get('concurrency', 3)),
         'max_requests_per_run': int(ai.get('max_requests_per_run', 300)),
         'horizon_days': int(ai.get('horizon_days', 365)),
+        'hide_exact_copies': bool(ai.get('hide_exact_copies', True)),
     }
     return out
 

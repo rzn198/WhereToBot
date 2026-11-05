@@ -45,6 +45,7 @@ def ai_settings(cfg: dict) -> dict:
         concurrency=max(1, int(ai.get('concurrency', 3))),
         max_requests=int(ai.get('max_requests_per_run', 300)),
         horizon_days=int(ai.get('horizon_days', 365)),
+        hide_exact_copies=bool(ai.get('hide_exact_copies', True)),
     )
 
 
@@ -97,6 +98,9 @@ async def run_dedup(pool: asyncpg.Pool, client: AIClient, cfg: dict, *, method: 
     client.begin_run()
     if not client.available:
         res.status, res.error = 'skipped', 'AI недоступен: нет ключа/моделей или модели исчерпаны'
+        if not dry_run:                              # пропуск тоже фиксируем: по нему сервис считает повторы и сообщает админу
+            res.run_id = await store.start_run(pool, method)
+            await store.finish_run(pool, res.run_id, 'skipped', res.stats, res.error)
         return res
 
     today = start_date or await pool.fetchval("SELECT CURRENT_DATE")
@@ -115,7 +119,7 @@ async def run_dedup(pool: asyncpg.Pool, client: AIClient, cfg: dict, *, method: 
     for r in records:
         by_day.setdefault(r.day, []).append(r)
 
-    salt = f"{method}|{PROMPT_VERSION}|{'>'.join(resolver.entries)}|{s['max_chars']}|{s['max_records']}"
+    salt = f"{method}|{PROMPT_VERSION}|{'>'.join(resolver.entries)}|{s['max_chars']}|{s['max_records']}|{int(s['hide_exact_copies'])}"
     work: list[tuple[date, list[Record], list[Live], str, bool]] = []
     for day in sorted(set(by_day) | set(live_by_day)):
         if only_days and day not in only_days:
@@ -174,7 +178,7 @@ async def run_dedup(pool: asyncpg.Pool, client: AIClient, cfg: dict, *, method: 
                     continue
             else:
                 groups = Groups()
-            plan = plan_day(day, cands, groups, live, resolver, method)
+            plan = plan_day(day, cands, groups, live, resolver, method, s['hide_exact_copies'])
             res.plans.append(plan)
             st['dates_processed'] += 1
             st['groups_found'] += len(groups)
