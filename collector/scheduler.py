@@ -36,6 +36,9 @@ async def job_parse_channels(
     await ai_service.end_run()
     logger.info(f"Parse job finished | total_saved={total}")
 
+    if (config.get('deduplication') or {}).get('method', 'legacy') == 'ai':
+        logger.info("POST_PARSE_DEDUP | пропущен: deduplication.method=ai (дубли обрабатывает deduplicator)")
+        return
     try:
         from scripts.find_duplicates import find_and_mark_duplicates
         flagged = await find_and_mark_duplicates(pool)

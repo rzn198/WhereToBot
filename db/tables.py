@@ -11,3 +11,8 @@ class Tables:
     EVENTS                = 'events'
     EVENT_FAVORITES       = 'event_favorites'
     EVENT_HIDDEN          = 'event_hidden'
+    CHANNELS              = 'channels'
+    DEDUP_RUNS            = 'dedup_runs'
+    DEDUP_DECISIONS       = 'dedup_decisions'
+    DEDUP_DATES           = 'dedup_dates'
+    COLLECTOR_RUNS        = 'collector_runs'
