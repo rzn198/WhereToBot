@@ -28,6 +28,13 @@ async def tick(pool, client, cfg: dict, st: ServiceSettings, *, now=None, send=N
         return None
     logger.info(f"DEDUP_SERVICE_RUN | method={method} | reason={why}")
     res = await run_dedup(pool, client, cfg, method=method)
+    st_ = res.stats
+    if res.status == 'ok':
+        logger.info(f"DEDUP_SERVICE_DONE | status=ok | dates={st_.get('dates_processed')}/{st_.get('dates_total')} "
+                    f"| requests={st_.get('requests')} | groups={st_.get('groups_found')} | hidden={st_.get('hidden')} "
+                    f"| unhidden={st_.get('unhidden')} | bad_days={st_.get('bad_days')} | skipped_days={st_.get('skipped_days')}")
+    else:
+        logger.warning(f"DEDUP_SERVICE_DONE | status={res.status} | {res.error}")
     if st.alerts:
         send = send or notify.send_admin
         texts = [notify.transition_text(snap.last_run_status, res.status, res.error, st)]
