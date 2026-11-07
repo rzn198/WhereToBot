@@ -115,14 +115,16 @@ class AIClient:
                 raise AIUnavailable(f"{self.name}: ключ отвергнут")
             if self._idx >= len(self.models):
                 raise AIUnavailable(f"{self.name}: все модели исчерпаны")
-            model = self.models[self._idx]
+            idx = self._idx
+            model = self.models[idx]
             self.stats.calls += 1
             try:
                 text = await self._call(model, system, user)
             except _ModelError as e:
                 self.stats.model_errors += 1
                 logger.warning(f"AI_{self.name.upper()}_MODEL_SWITCH | model={model} | {e}")
-                self._shift()
+                if self._idx == idx:          # параллельные запросы с одной и той же упавшей моделью сдвигают указатель один раз
+                    self._shift()
                 continue
             self.stats.ok += 1
             self.stats.by_model[model] += 1
