@@ -173,3 +173,66 @@ def chunk_records(records: list[Record], max_records: int, overlap: int = 10) ->
         if i + max_records >= len(records):
             return chunks
         i += step
+
+
+def plan_requests(records: list[Record], max_records: int, max_requests: int = 21,
+                  overlap: int = 10) -> list[list[Record]]:
+    """Запросы к модели на одну дату.
+
+    До max_records записей — один запрос. Больше — день делится на части по ~max_records/2 и модели отдаётся
+    каждая ПАРА частей: любые две записи гарантированно окажутся в одном запросе (раньше нарезка с перекрытием
+    разводила пост канала и карточку сайта по разным запросам, и дубль не находился). Запросов выходит k(k-1)/2;
+    если больше max_requests (очень большой день) — прежняя нарезка с перекрытием."""
+    n = len(records)
+    if n <= max_records:
+        return [records]
+    half = max(1, max_records // 2)
+    k = -(-n // half)                                   # число частей
+    if k * (k - 1) // 2 > max_requests:
+        logger.warning(f"DEDUP_DAY_TOO_BIG | records={n} parts={k} requests={k * (k - 1) // 2} > {max_requests}: "
+                       f"нарезка с перекрытием, пары записей на стыках могут не сравниться")
+        return chunk_records(records, max_records, overlap)
+    size = -(-n // k)                                   # части почти одинаковые
+    parts = [records[i:i + size] for i in range(0, n, size)]
+    return [a + b for i, a in enumerate(parts) for b in parts[i + 1:]]
+
+
+MAX_MERGED_GROUP = 8
+
+
+def merge_groups(groups: list[Group], order: list[Record]) -> list[Group]:
+    """Группы из разных запросов объединяются, если у них есть общая запись: дубль из трёх записей x, y, z
+    в разных частях даёт {x,y}, {x,z}, {y,z} — это одна группа {x,y,z}. Причина — первая непустая."""
+    pos = {r.key: i for i, r in enumerate(order)}
+    parent: dict = {}
+
+    def find(a):
+        while parent[a] != a:
+            parent[a] = parent[parent[a]]
+            a = parent[a]
+        return a
+
+    for g in groups:
+        for m in g.members:
+            parent.setdefault(m.key, m.key)
+        first = g.members[0].key
+        for m in g.members[1:]:
+            parent[find(m.key)] = find(first)
+    members: dict = {}
+    reasons: dict = {}
+    for g in groups:
+        root = find(g.members[0].key)
+        bucket = members.setdefault(root, {})
+        for m in g.members:
+            bucket[m.key] = m
+        if g.reason and not reasons.get(root):
+            reasons[root] = g.reason
+    out = []
+    for root, bucket in members.items():
+        ms = sorted(bucket.values(), key=lambda r: pos.get(r.key, 0))
+        if len(ms) > MAX_MERGED_GROUP:
+            logger.warning(f"DEDUP_BIG_GROUP | members={len(ms)} | {reasons.get(root, '')[:80]!r}: "
+                           f"проверьте, не склеены ли разные события")
+        out.append(Group(members=ms, reason=reasons.get(root, '')))
+    out.sort(key=lambda g: pos.get(g.members[0].key, 0))
+    return out

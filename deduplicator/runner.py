@@ -21,7 +21,7 @@ from deduplicator import store
 from deduplicator.audit import audit_from_cfg
 from deduplicator.engine import DayPlan, Live, candidates, plan_day
 from deduplicator.grouping import (PROMPT_VERSION, SYSTEM_PROMPT, BadGroupingOutput, Groups, build_prompt,
-                                   chunk_records, parse_groups)
+                                   chunk_records, merge_groups, parse_groups, plan_requests)
 from deduplicator.priority import PriorityResolver
 from deduplicator.records import Record, fingerprint
 from shared.ai import AIClient, AIUnavailable
@@ -47,6 +47,7 @@ def ai_settings(cfg: dict) -> dict:
         max_chars=int(ai.get('max_chars_per_record', 300)),
         concurrency=max(1, int(ai.get('concurrency', 3))),
         max_requests=int(ai.get('max_requests_per_run', 300)),
+        max_day_requests=int(ai.get('max_requests_per_day', 21)),
         horizon_days=int(ai.get('horizon_days', 365)),
         hide_exact_copies=bool(ai.get('hide_exact_copies', True)),
     )
@@ -65,9 +66,9 @@ def _after_apply(cands: list[Record], plan: DayPlan) -> list[Record]:
 async def _ask_day(client: AIClient, recs: list[Record], resolver: PriorityResolver, s: dict) -> Groups:
     ordered = sorted(recs, key=lambda r: (resolver.label(r), r.id))
     labels = {r.key: resolver.label(r) for r in recs}
-    used: set = set()
+    found: list = []
     out = Groups()
-    for chunk in chunk_records(ordered, s['max_records']):
+    for chunk in plan_requests(ordered, s['max_records'], s['max_day_requests']):
         prompt, index = build_prompt(chunk, labels, s['max_chars'])
         raw = await client.complete(SYSTEM_PROMPT, prompt)
         model = getattr(client, 'current_model', '') or ''     # модель, давшая этот ответ (после возможного отката)
@@ -83,11 +84,8 @@ async def _ask_day(client: AIClient, recs: list[Record], resolver: PriorityResol
         client.report_ok()
         out.lists |= groups.lists
         out.weak |= groups.weak
-        for g in groups:
-            if any(m.key in used for m in g.members):
-                continue
-            used.update(m.key for m in g.members)
-            out.append(g)
+        found.extend(groups)
+    out.extend(merge_groups(found, ordered))
     return out
 
 
@@ -165,7 +163,7 @@ async def run_dedup(pool: asyncpg.Pool, client: AIClient, cfg: dict, *, method: 
             async with sem:
                 if down['cause']:
                     return None
-                n_req = len(chunk_records(cands, s['max_records']))
+                n_req = len(plan_requests(cands, s['max_records'], s['max_day_requests']))
                 if budget['left'] < n_req:
                     st['skipped_days'] += 1
                     return None
