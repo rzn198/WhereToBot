@@ -158,7 +158,7 @@ async def main():
             try:
                 res = await runner.run_dedup(pool, client, run_cfg, method='shadow', dry_run=True, force=True,
                                              start_date=start, ignore_hidden=not args.respect_hidden,
-                                             max_days=args.max_days or None)
+                                             max_days=args.max_days or None, ignore_decisions=True)
             finally:
                 await client.aclose()
             if res.status != 'ok':

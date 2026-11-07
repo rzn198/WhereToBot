@@ -91,9 +91,11 @@ async def _ask_day(client: AIClient, recs: list[Record], resolver: PriorityResol
 
 async def run_dedup(pool: asyncpg.Pool, client: AIClient, cfg: dict, *, method: str, dry_run: bool = False,
                     force: bool = False, only_days: list[date] | None = None, start_date: date | None = None,
-                    ignore_hidden: bool = False, max_days: int | None = None) -> RunResult:
+                    ignore_hidden: bool = False, max_days: int | None = None,
+                    ignore_decisions: bool = False) -> RunResult:
     """start_date/ignore_hidden/max_days — для dedup_replay.py: анализ прошлых дат, скрытые записи считаются
-    видимыми (чтобы сравнить с прежним хуком), ограничение числа дат."""
+    видимыми (чтобы сравнить с прежним хуком), ограничение числа дат; ignore_decisions — не учитывать решения из БД
+    (сравнение моделей не должно зависеть от того, что уже решил прод)."""
     if method not in ('shadow', 'ai'):
         raise ValueError(f"run_dedup: method должен быть shadow или ai, получено {method!r}")
     s = ai_settings(cfg)
@@ -122,7 +124,7 @@ async def run_dedup(pool: asyncpg.Pool, client: AIClient, cfg: dict, *, method: 
     records = await store.load_records(pool, today, end)
     if ignore_hidden:
         records = [replace(r, hidden=False) for r in records]
-    live_by_day = await store.load_live(pool, today, end)
+    live_by_day = {} if ignore_decisions else await store.load_live(pool, today, end)
     stored_fp = {} if force else await store.load_fingerprints(pool, today, end)
     by_day: dict[date, list[Record]] = {}
     for r in records:
