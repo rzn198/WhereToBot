@@ -152,7 +152,6 @@ class AuditLog(NullAudit):
     def log_day(self, plan, cands: list[Record], resolver, *, run_id, model, groups, asked_ai: bool,
                 prev: list[dict] | None = None) -> None:
         """Все события одной даты. Вызывать после успешного применения плана."""
-        from deduplicator.engine import order_group
         day = plan.day.isoformat()
         wanted = {nd.loser.key: nd for nd in plan.wanted}
         inserted = {nd.loser.key for nd in plan.insert}
@@ -161,7 +160,8 @@ class AuditLog(NullAudit):
         group_rows = []
         for gi, g in enumerate(plan.groups, 1):
             gid = f"{day}#{gi}"
-            winner, rest = order_group(g.members, plan.lists, plan.weak, resolver)
+            wkey = plan.group_winners[gi - 1] if gi - 1 < len(plan.group_winners) else None
+            winner = next((m for m in g.members if m.key == wkey), None) if wkey else None
             winner_of_group[gid] = winner.key if winner else None
             members = []
             for m in sorted(g.members, key=resolver.rank):
@@ -216,6 +216,9 @@ class AuditLog(NullAudit):
                           reason=_kept_reason(r, plan, None), record=self._rec(r, resolver))
 
         recs = {r.key: r for r in cands}
+        for old_w, new_w in plan.merged.items():
+            self.emit('merge', run=run_id, day=day, previous_winner=self._rec(recs[old_w], resolver) if old_w in recs else None,
+                      winner=self._rec(recs[new_w], resolver) if new_w in recs else None)
         for p in prev or []:
             if p['status'] == 'reverted' or p['decided_by'] == 'admin':
                 continue

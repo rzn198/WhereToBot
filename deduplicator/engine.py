@@ -5,6 +5,10 @@
 
 Правила:
   * победитель группы — лучшая по иерархии запись; скрываются только записи ДРУГИХ источников;
+  * победитель «липкий»: пока он цел и виден, он остаётся победителем. Новый участник группы проигрывает
+    действующему победителю, даже если его источник выше по иерархии. При слиянии двух групп остаётся победитель
+    с более ранним решением (меньший id в dedup_decisions), второй победитель и его проигравшие переходят под него.
+    По иерархии победитель выбирается только у новой группы или когда прежний победитель пропал/скрыт/сменил дату;
   * строки дайджестов (position > 0) могут побеждать, но сами не скрываются (в одной строке — целый
     день событий, скрыть её из-за одного дубля нельзя);
   * «воскрешение»: если группа распалась, победитель пропал, скрыт вручную или сменил дату —
@@ -30,7 +34,7 @@ class Live:
     id: int
     loser: Key
     winner: Key
-    status: str
+    status: str                    # active | reverted | proposed (proposed — только для «липкости» победителя)
     decided_by: str = 'ai'
     reason: str = ''
 
@@ -57,6 +61,8 @@ class DayPlan:
     hide: list[Key] = field(default_factory=list)
     unhide: list[Key] = field(default_factory=list)
     kept: int = 0
+    group_winners: list = field(default_factory=list)        # победитель по каждой группе (в порядке groups): Key | None
+    merged: dict = field(default_factory=dict)               # ключ вытесненного победителя → ключ победителя-хозяина
     pinned: set = field(default_factory=set)                  # админ вернул проигравшего: AI его больше не скрывает
     locked: set = field(default_factory=set)                  # решение админа: AI не пересчитывает
 
@@ -106,17 +112,45 @@ def plan_day(day: date, records: list[Record], groups: list[Group], live: list[L
               if d.decided_by == 'admin' and k in recs and d.winner in recs}
 
     plan.pinned, plan.locked = set(pinned), set(locked)
+    # «липкие» победители: запись, которая сейчас выигрывает по действующему решению; порядок — по раннему id решения
+    incumbent: dict[Key, int] = {}
+    for d in live:
+        if d.winner in recs and not recs[d.winner].hidden:
+            incumbent[d.winner] = min(d.id, incumbent.get(d.winner, d.id))
+    losers_of: dict[Key, list[Key]] = {}
+    for d in live:
+        if d.status != 'reverted':
+            losers_of.setdefault(d.winner, []).append(d.loser)
+
     wanted: dict[Key, NewDecision] = {}
     winners: set[Key] = set()
     for g in groups:
-        winner, rest = order_group([m for m in g.members if m.key in recs], plan.lists, plan.weak, resolver)
+        members = [m for m in g.members if m.key in recs]
+        ok = eligible(members, plan.lists)
+        # weak в новом ответе не лишает победителя места: победитель когда-то прошёл как сильный, а пометка модели нестабильна
+        incs = [m for m in ok if m.key in incumbent and m.key not in wanted]
+        if incs:
+            winner = min(incs, key=lambda m: (incumbent[m.key], resolver.rank(m)))
+            rest = sorted((m for m in ok if m.key != winner.key), key=resolver.rank)
+        else:
+            winner, rest = order_group(members, plan.lists, plan.weak, resolver)
         if winner is None or not any(m.source != winner.source for m in rest):
+            plan.group_winners.append(None)
             continue
+        plan.group_winners.append(winner.key)
         winners.add(winner.key)
         for m in rest:
             if m.source == winner.source or m.key in pinned or m.key in locked:
                 continue
             wanted[m.key] = NewDecision(loser=m, winner=winner, reason=g.reason)
+            if m.key in incumbent:                       # слияние: прежний победитель и его проигравшие уходят под нового
+                plan.merged[m.key] = winner.key
+                for lk in losers_of.get(m.key, ()):
+                    t = recs.get(lk)
+                    if (t is None or t.key in wanted or t.key in winners or t.key in pinned or t.key in locked
+                            or t.source == winner.source or t.is_list or t.is_digest or t.key in plan.lists):
+                        continue
+                    wanted[t.key] = NewDecision(loser=t, winner=winner, reason=g.reason or 'слияние групп', via='merge')
 
     # точные копии проигравшего (тот же источник, тот же текст) уходят вместе с ним, даже если AI их не назвал
     copies: dict[tuple, list[Record]] = {}

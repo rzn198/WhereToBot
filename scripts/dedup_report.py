@@ -36,7 +36,8 @@ sys.path.insert(0, str(HERE.parent))
 
 DEFAULT_LOG = HERE.parent / 'logs' / 'dedup_audit.jsonl'
 
-VIA = {'ai_group': 'ИИ (группа)', 'exact_copy': 'точная копия проигравшего', 'same_source': 'копия того же источника'}
+VIA = {'ai_group': 'ИИ (группа)', 'exact_copy': 'точная копия проигравшего', 'same_source': 'копия того же источника',
+       'merge': 'слияние групп (перешёл под нового победителя)'}
 KEPT = {'digest': 'строка дайджеста', 'list': 'перечень событий', 'weak': 'слабое упоминание',
         'same_source': 'тот же источник, что у победителя', 'admin_locked': 'решение админа',
         'reverted_by_admin': 'админ вернул', 'no_winner': 'нет подходящего победителя', 'other': 'другое'}

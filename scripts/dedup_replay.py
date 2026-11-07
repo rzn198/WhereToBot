@@ -120,6 +120,9 @@ async def main():
     ap.add_argument('--max-days', type=int, default=0, help='обработать не больше N дат (0 — все)')
     ap.add_argument('--concurrency', type=int, default=3)
     ap.add_argument('--timeout', type=float, default=120)
+    ap.add_argument('--max-records', type=int, default=0,
+                    help='записей в одном запросе (по умолчанию deduplication.ai.max_records_per_request, 80); '
+                         'для сравнения нарезок. Результаты разных запусков кладите в разные --out-dir')
     ap.add_argument('--respect-hidden', action='store_true', help='не считать скрытые записи видимыми')
     ap.add_argument('--use-parsing-key', action='store_true', help='взять OPENCODE_PARSING_API_KEY, если нет ключа дедупа')
     ap.add_argument('--out-dir', default=str(HERE / 'dedup_runs'))
@@ -150,7 +153,8 @@ async def main():
         for i, model in enumerate(models, 1):
             print(f"[{i}/{len(models)}] {model}: сравниваю...", flush=True)
             client = client_from_config('dedup', {**ai, 'api_key': key, 'models': [model], 'timeout': args.timeout})
-            run_cfg = {'ai': {**ai, 'concurrency': args.concurrency}}
+            run_cfg = {'ai': {**ai, 'concurrency': args.concurrency,
+                              **({'max_records_per_request': args.max_records} if args.max_records else {})}}
             try:
                 res = await runner.run_dedup(pool, client, run_cfg, method='shadow', dry_run=True, force=True,
                                              start_date=start, ignore_hidden=not args.respect_hidden,

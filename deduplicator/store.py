@@ -44,7 +44,7 @@ async def load_live(pool: asyncpg.Pool, start: date, end: date) -> dict[date, li
     by_day: dict[date, list[Live]] = {}
     for r in await pool.fetch(
             f"SELECT id, day, winner_kind, winner_id, loser_kind, loser_id, status, decided_by, reason "
-            f"FROM {Tables.DEDUP_DECISIONS} WHERE status IN ('active', 'reverted') AND day BETWEEN $1 AND $2",
+            f"FROM {Tables.DEDUP_DECISIONS} WHERE status IN ('active', 'reverted', 'proposed') AND day BETWEEN $1 AND $2",
             start, end):
         by_day.setdefault(r['day'], []).append(Live(
             id=r['id'], loser=(r['loser_kind'], r['loser_id']), winner=(r['winner_kind'], r['winner_id']),
@@ -111,7 +111,15 @@ async def apply_day(pool: asyncpg.Pool, plan: DayPlan, *, run_id: int | None, fi
     """Одна транзакция на дату: решения, скрытия и отпечаток применяются вместе или не применяются."""
     async with pool.acquire() as conn:
         async with conn.transaction():
-            await conn.execute(f"DELETE FROM {Tables.DEDUP_DECISIONS} WHERE day = $1 AND status = 'proposed'", plan.day)
+            if plan.method == 'ai':
+                await conn.execute(f"DELETE FROM {Tables.DEDUP_DECISIONS} WHERE day = $1 AND status = 'proposed'", plan.day)
+            else:       # shadow: прежние proposed, которые остаются в силе, не пересоздаём — от их id зависит «липкость» победителя
+                keep = [[nd.loser.kind, nd.loser.id, nd.winner.kind, nd.winner.id] for nd in plan.wanted]
+                await conn.execute(
+                    f"DELETE FROM {Tables.DEDUP_DECISIONS} d WHERE d.day = $1 AND d.status = 'proposed' AND NOT EXISTS ("
+                    f"SELECT 1 FROM unnest($2::text[], $3::bigint[], $4::text[], $5::bigint[]) AS k(lk, li, wk, wi) "
+                    f"WHERE k.lk = d.loser_kind AND k.li = d.loser_id AND k.wk = d.winner_kind AND k.wi = d.winner_id)",
+                    plan.day, [k[0] for k in keep], [k[1] for k in keep], [k[2] for k in keep], [k[3] for k in keep])
             if plan.method == 'ai':
                 if plan.revert:
                     await conn.execute(f"UPDATE {Tables.DEDUP_DECISIONS} SET status = 'reverted', updated_at = now() "
