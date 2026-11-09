@@ -14,7 +14,9 @@ EVENT_DESC_CHARS = 400
 
 
 def _event_text(row) -> str:
-    parts = [row['title'] or '', row['venue'] or '', (row['description_ru'] or row['description'] or '')[:EVENT_DESC_CHARS]]
+    # Только оригинальное описание: перевод (description_ru) не должен менять отпечаток даты, иначе каждый
+    # переведённый ивент заставлял бы дедупликатор заново спрашивать ИИ про всю дату.
+    parts = [row['title'] or '', row['venue'] or '', (row['description'] or '')[:EVENT_DESC_CHARS]]
     return '. '.join(p.strip() for p in parts if p and p.strip())
 
 

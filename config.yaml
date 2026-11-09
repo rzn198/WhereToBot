@@ -57,29 +57,45 @@ channels:
     - name: "@runningbeg"
       parser: "running_beg"
 
-opencode:
-  base_url: "https://opencode.ai/zen/go/v1"
-  models:
-    - "jev-1.13"
-    - "mimo-v2.6-flash-free"          # 30100 запросов/5ч — основная, самая ёмкая
-    - "deepseek-v4.1-flash-free"  # 7600/5ч — фолбэк (транслитерирует имена в кириллицу)
-    - "glm-5.3-flash"      # 6320/5ч — фолбэк
-    - "longcat-2.0"        # 11400/5ч — фолбэк
-  max_chars: 600
-
+translation:
+  method: off
+  sources:                    # значения events.source; пусто = ничего не переводим
+    - efinityrs
+    - biletrs
+    - ticketsrs
+    - gigstix
+    - balkan-promo
+  models:                     # цепочка: при отказе отвечает СЛЕДУЮЩАЯ модель по списку
+    - glm-5.3-flash
+    - gpt-6-luna
+    - deepseek-v4.1-flash
+    - glm-5.3-flash
+    - beam-free
+  max_chars: 600              # длина перевода до ссылки на билеты
+  input_chars: 1500           # сколько символов оригинала отправляем модели
+  concurrency: 3
+  only_upcoming: true         # события в прошлом не переводим
+  retry_minutes: 30           # повтор, если модели были недоступны
+  max_retries: 3
+  run_on_start: true          # один проход при старте сервиса (накопленное)
 
 parsing:
-  date_method: shadow
-  category_method: shadow
+  date_method: ai
+  category_method: ai
   ai_null_date_fallback: true
   ai_empty_categories_fallback: true
-  ai_trust_non_event: false      # включим позже, по логам AI_NON_EVENT
+  ai_trust_non_event: true
   max_chars: 2000
   max_calls_per_run: 1000
   timeout: 120
   models:
-    - deepseek-v4.1-flash                 # основная
+    - gpt-5.6-luna
     - gpt-6-luna
+    - beam-free
+    - deepseek-v4.1-flash
+    - glm-5.3-flash
+    - mimo-v2.6-flash
+    - minimax-m3.1-flash
 
 deduplication:
   audit:
@@ -90,20 +106,26 @@ deduplication:
     raw_answers: true
   method: shadow
   ai:
-    models: [deepseek-v4.1-flash, gpt-6-luna, glm-5.3-flash, beam-free]
+    models: [deepseek-v4.1-flash, gpt-6-luna, beam-free, mimo-v2.6-flash, minimax-m3.1-flash]
     priority:
-      - ch:1765919452   # @vstrechi_v_belgrade
-      - ch:1530279711   # @sta_imas_beograd
-      - ch:2195736208   # @free_belgrade
-      - ch:1641980450   # @zarko_tusic
-      - ch:1644390566   # @standup_beo
-      - ch:1919577389   # @obitaniya_sreda
-      - ch:1869378987   # @afisha_rs
-      - ch:1855294969   # @soroka_beloboka_rs
       - event:efinityrs
       - event:biletrs
-      - event:polako
       - event:ticketsrs
       - event:gigstix
       - event:ticrs
       - event:balkan-promo
+      - ch:2295064500   # @auditoria_belgrade — Auditoria Belgrade
+      - ch:1919577389   # @obitaniya_sreda — Среда Обитания
+      - ch:1644390566   # @standup_beo — Опять Эти. Стендап в Сербии
+      - ch:1840107118   # @blackcat_beograd — Антикафе "Black Cat" Белград
+      - ch:2124093801   # @triptix_belgrade — TriptiX Belgrade
+      - ch:1801877538   # @vmeste_events — vmeste.events
+      - ch:1641980450   # @zarko_tusic — Жарко Тусић
+      - ch:1820001743   # @beogradski20 — Beogradski, экскурсии
+      - ch:1284130296   # @balkanoutdoor — BalkanOutdoor
+      - ch:1925197008   # @runningbeg — BEG.BELGRADE
+      - ch:1872344162   # @adaptacija — Adaptacija Belgrade
+      - event:polako
+      - ch:1765919452   # @vstrechi_v_belgrade — Встречи в Белграде (афиша мероприятий)
+      - ch:1530279711   # @sta_imas_beograd — Что там в Белграде?
+      - ch:2195736208   # @free_belgrade — Free Belgrade / Бесплатный Белград

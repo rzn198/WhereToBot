@@ -43,16 +43,41 @@ def load_config() -> dict:
 
     yaml_oc = cfg.get('opencode', {}) or {}
     cfg['opencode'] = {
-        'api_key': os.getenv('OPENCODE_API_KEY', ''),
         'base_url': yaml_oc.get('base_url', 'https://opencode.ai/zen/go/v1'),
-        'models': yaml_oc.get('models', []),
-        'max_chars': int(yaml_oc.get('max_chars', 600)),
     }
 
+    cfg['translation'] = _translation_section(cfg.get('translation') or {}, cfg['opencode'])
     cfg['parsing'] = _parsing_section(cfg.get('parsing') or {}, cfg['opencode'])
     cfg['deduplication'] = _dedup_section(cfg.get('deduplication') or {}, cfg['opencode'])
 
     return cfg
+
+
+TRANSLATION_METHODS = ('off', 'shadow', 'on')
+
+
+def _translation_section(y: dict, oc: dict) -> dict:
+    """Перевод описаний событий (запускается из сервиса deduplicator после его прогона). Ключ: OPENCODE_API_KEY.
+    method: off | shadow (только лог) | on. sources — значения events.source, которые переводим."""
+    method = (os.getenv('TRANSLATION_METHOD') or y.get('method') or 'off').strip().lower()
+    sources = y.get('sources') or []
+    if isinstance(sources, str):
+        sources = sources.split(',')
+    return {
+        'method': method if method in TRANSLATION_METHODS else 'off',
+        'sources': [str(s).strip().lower() for s in sources if str(s).strip()],
+        'models': list(y.get('models') or []),
+        'base_url': y.get('base_url') or oc['base_url'],
+        'api_key': os.getenv('OPENCODE_API_KEY', ''),
+        'timeout': float(y.get('timeout', 60)),
+        'max_chars': int(y.get('max_chars', 600)),
+        'input_chars': int(y.get('input_chars', 1500)),
+        'concurrency': int(y.get('concurrency', 3)),
+        'only_upcoming': bool(y.get('only_upcoming', True)),
+        'retry_minutes': float(y.get('retry_minutes', 30)),
+        'max_retries': int(y.get('max_retries', 3)),
+        'run_on_start': bool(y.get('run_on_start', True)),
+    }
 
 
 def _parsing_section(y: dict, oc: dict) -> dict:

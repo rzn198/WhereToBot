@@ -15,9 +15,10 @@ from deduplicator.audit import audit_from_cfg
 from deduplicator.runner import run_dedup
 from deduplicator.schedule import ServiceSettings, close_interrupted_runs, decide, load_snapshot, service_settings
 from shared.ai import client_from_config
+from translator.service import TranslationHook, translation_settings
 
 
-async def tick(pool, client, cfg: dict, st: ServiceSettings, *, now=None, send=None):
+async def tick(pool, client, cfg: dict, st: ServiceSettings, *, now=None, send=None, on_ok=None):
     """Один проход: решаем, пора ли запускаться; если да — прогон и сообщения админу. Возвращает RunResult или None."""
     method = cfg.get('method', 'legacy')
     if method not in ('shadow', 'ai'):
@@ -44,6 +45,11 @@ async def tick(pool, client, cfg: dict, st: ServiceSettings, *, now=None, send=N
         for t in texts:
             if t:
                 await send(t)
+    if res.status == 'ok' and on_ok is not None:
+        try:
+            on_ok(res)                    # перевод победителей запускается ТОЛЬКО после успешного прогона
+        except Exception as e:
+            logger.exception(f"DEDUP_SERVICE_ON_OK_ERROR | {type(e).__name__}: {e}")
     return res
 
 
@@ -68,14 +74,30 @@ async def main():
     logger.info(f"Dedup audit log | enabled={aud.enabled}" + (f" | file={aud.path} | rotation={cfg['audit']['rotation_mb']}MB"
                 f" | retention={cfg['audit']['retention_days']}d" if aud.enabled else " (deduplication.audit.enabled=false)"))
     client = client_from_config('dedup', cfg['ai'])
+
+    tcfg = config['translation']
+    tst = translation_settings(tcfg)
+    hook = TranslationHook(pool, client_from_config('translate', tcfg), tst)
+    dedup_on = cfg['method'] in ('shadow', 'ai')
+    logger.info(f"Translation | method={tst.method} | sources={list(tst.sources)} | models={tcfg['models']} | "
+                f"upcoming_only={tst.only_upcoming} | key={'set' if tcfg['api_key'] else 'MISSING'}")
+    if tst.method != 'off' and not tst.sources:
+        logger.warning("TRANSLATE_IDLE | translation.sources пуст: ничего не переводим")
+    if tst.method != 'off' and not dedup_on:
+        logger.warning("TRANSLATE_IDLE | перевод идёт только после дедупликатора: включи deduplication.method shadow или ai")
+    if dedup_on and tst.run_on_start:
+        hook.trigger('start')
+
     try:
         while True:
             try:
-                await tick(pool, client, cfg, st)
+                await tick(pool, client, cfg, st, on_ok=lambda _res: hook.trigger('dedup_ok'))
+                hook.poll()
             except Exception as e:
                 logger.exception(f"DEDUP_SERVICE_TICK_ERROR | {type(e).__name__}: {e}")
             await asyncio.sleep(st.poll_seconds)
     finally:
+        await hook.aclose()
         await close_db_pool(pool)
         logger.info("Deduplicator stopped")
 
