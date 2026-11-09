@@ -58,7 +58,7 @@ channels:
       parser: "running_beg"
 
 translation:
-  method: off              # off | shadow (только лог TRANSLATE_SHADOW, модели не вызываются) | on
+  method: off
   sources:                    # значения events.source; пусто = ничего не переводим
     - efinityrs
     - biletrs
