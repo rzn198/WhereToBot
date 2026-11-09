@@ -58,7 +58,7 @@ channels:
       parser: "running_beg"
 
 translation:
-  method: shadow              # off | shadow (только лог TRANSLATE_SHADOW, модели не вызываются) | on
+  method: off              # off | shadow (только лог TRANSLATE_SHADOW, модели не вызываются) | on
   sources:                    # значения events.source; пусто = ничего не переводим
     - efinityrs
     - biletrs
@@ -66,9 +66,11 @@ translation:
     - gigstix
     - balkan-promo
   models:                     # цепочка: при отказе отвечает СЛЕДУЮЩАЯ модель по списку
-    - deepseek-v4.1-flash
-    - gpt-6-luna
     - glm-5.3-flash
+    - gpt-6-luna
+    - deepseek-v4.1-flash
+    - glm-5.3-flash
+    - beam-free
   max_chars: 600              # длина перевода до ссылки на билеты
   input_chars: 1500           # сколько символов оригинала отправляем модели
   concurrency: 3
