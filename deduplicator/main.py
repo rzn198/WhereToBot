@@ -12,6 +12,7 @@ from loguru import logger
 
 from deduplicator import notify
 from deduplicator.audit import audit_from_cfg
+from deduplicator.lock import try_lock
 from deduplicator.runner import run_dedup
 from deduplicator.schedule import ServiceSettings, close_interrupted_runs, decide, load_snapshot, service_settings
 from shared.ai import client_from_config
@@ -28,8 +29,12 @@ async def tick(pool, client, cfg: dict, st: ServiceSettings, *, now=None, send=N
     if not go:
         logger.debug(f"DEDUP_SERVICE_WAIT | {why}")
         return None
-    logger.info(f"DEDUP_SERVICE_RUN | method={method} | reason={why}")
-    res = await run_dedup(pool, client, cfg, method=method)
+    async with try_lock(pool) as got:
+        if not got:
+            logger.info("DEDUP_SERVICE_BUSY | другой прогон дедупликации уже идёт (ручной запуск?) — пропускаю такт")
+            return None
+        logger.info(f"DEDUP_SERVICE_RUN | method={method} | reason={why}")
+        res = await run_dedup(pool, client, cfg, method=method)
     st_ = res.stats
     if res.status == 'ok':
         logger.info(f"DEDUP_SERVICE_DONE | status=ok | dates={st_.get('dates_processed')}/{st_.get('dates_total')} "

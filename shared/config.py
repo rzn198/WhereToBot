@@ -141,6 +141,7 @@ def _dedup_section(y: dict, oc: dict) -> dict:
         method = 'legacy'
     out['method'] = method
     out['audit'] = _dedup_audit(y)
+    out['history_days'] = max(1, int(y.get('history_days', 60)))   # сколько хранить решения, прогоны и отпечатки дат
     out['ai'] = {
         'base_url': ai.get('base_url') or oc['base_url'],
         'models': list(ai.get('models') or []),

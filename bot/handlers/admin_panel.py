@@ -18,6 +18,10 @@ from shared.constants import (
 )
 from bot.handlers.contact import _require_admin, _edit_contact_window, escape_md
 from bot.handlers.calendar import build_calendar, MONTHS_RU
+from bot.handlers.events import EVENTS_CITY
+from db.dedup_admin import (
+    decision_for_loser, dependents_count, hide_record, make_ref, parse_ref, record_info, show_record,
+)
 
 
 BELGRADE_TZ = ZoneInfo('Europe/Belgrade')
@@ -212,14 +216,19 @@ async def _show_admin_hidden_calendar(
     year = context.user_data.get('admin_hidden_year', date.today().year)
     month = context.user_data.get('admin_hidden_month', date.today().month)
 
+    # скрытые тоже: админ ищет именно их. События сайтов — те же, что видят пользователи (Белград)
     row = await pool.fetchrow(f"""
             SELECT
-                array_agg(DISTINCT date) as dates,
-                MAX(date) as max_date
-            FROM {Tables.MESSAGES}
-            WHERE date IS NOT NULL
-            AND date >= CURRENT_DATE
-        """)
+                array_agg(DISTINCT d) as dates,
+                MAX(d) as max_date
+            FROM (
+                SELECT date AS d FROM {Tables.MESSAGES}
+                WHERE date IS NOT NULL AND date >= CURRENT_DATE
+                UNION ALL
+                SELECT starts_at FROM {Tables.EVENTS}
+                WHERE starts_at >= CURRENT_DATE AND city = $1
+            ) t
+        """, EVENTS_CITY)
     dates_with_events = set(row['dates'] or [])
     max_date = row['max_date'] if row and row['max_date'] else date.today()
 
@@ -294,11 +303,15 @@ async def handle_admin_hidden_date(
         await query.answer('Неверная дата', show_alert=True)
         return
 
+    # сначала посты каналов, затем события сайтов — как в ленте пользователя
     rows = await pool.fetch(f"""
-        SELECT surrogate_id FROM {Tables.MESSAGES}
+        SELECT 0 AS ord, 'm' AS kind, surrogate_id AS id, created_at FROM {Tables.MESSAGES}
         WHERE date = $1
-        ORDER BY created_at
-    """, selected_date)
+        UNION ALL
+        SELECT 1, 'e', id, created_at FROM {Tables.EVENTS}
+        WHERE starts_at = $1 AND city = $2
+        ORDER BY ord, created_at, id
+    """, selected_date, EVENTS_CITY)
 
     if not rows:
         await _edit_contact_window(
@@ -313,7 +326,7 @@ async def handle_admin_hidden_date(
         )
         return
 
-    context.user_data['admin_hidden_event_ids'] = [r['surrogate_id'] for r in rows]
+    context.user_data['admin_hidden_event_ids'] = [make_ref(r['kind'], r['id']) for r in rows]
     context.user_data['admin_hidden_event_index'] = 0
 
     await _show_admin_hidden_event(update, context, pool)
@@ -332,28 +345,45 @@ async def _show_admin_hidden_event(
     if not event_ids or idx >= len(event_ids):
         return
 
-    surrogate_id = event_ids[idx]
+    ref = event_ids[idx]
+    parsed = parse_ref(ref)
+    info = await record_info(pool, *parsed) if parsed else None
 
-    row = await pool.fetchrow(f"""
-        SELECT surrogate_id, text, date, hidden_by_admin
-        FROM {Tables.MESSAGES}
-        WHERE surrogate_id = $1
-    """, surrogate_id)
-
-    if not row:
+    if not info:
+        context.user_data['admin_hidden_event_ids'] = [r for r in event_ids if r != ref]
+        context.user_data['admin_hidden_event_index'] = max(0, min(idx, len(event_ids) - 2))
+        if len(event_ids) > 1:
+            await _show_admin_hidden_event(update, context, pool)
         return
 
-    status = '🚫 Скрытое' if row['hidden_by_admin'] else '👁 Видимое'
-    text = (
-        f"📅 {row['date']}\n"
-        f"Статус: {status}\n\n"
-        f"{escape_md(row['text'][:EVENT_LIST_PREVIEW_LENGTH])}"
-    )
+    status = '🚫 Скрытое' if info['hidden'] else '👁 Видимое'
+    lines = [
+        f"📅 {info['day']} · {'📨 пост' if info['kind'] == 'm' else '🌐 событие'} · {escape_md(info['source'])}",
+        f"Статус: {status}",
+    ]
+    if info['hidden']:
+        dec = await decision_for_loser(pool, info['kind'], info['id'])
+        if dec:
+            win = await record_info(pool, dec['winner_kind'], dec['winner_id'])
+            who = escape_md(win['source']) if win else 'удалённой записи'
+            lines.append(f"🤖 Скрыто AI как дубль записи {who}"
+                         + (f"\nПричина: {escape_md(dec['reason'])}" if dec['reason'] else ''))
+        else:
+            lines.append("✋ Скрыто вручную")
+    else:
+        n = await dependents_count(pool, info['kind'], info['id'])
+        if n:
+            lines.append(f"ℹ️ Победитель: в её пользу скрыто дублей — {n}. "
+                         f"Если скрыть её вручную, они снова станут видны.")
+    notice = context.user_data.pop('admin_hidden_notice', None)
+    if notice:
+        lines.insert(0, f"✅ {escape_md(notice)}")
+    text = "\n".join(lines) + f"\n\n{escape_md(info['text'][:EVENT_LIST_PREVIEW_LENGTH])}"
 
     hide_show_btn = (
-        InlineKeyboardButton('✅ Показать для всех', callback_data=f'admin_hidden:show:{surrogate_id}')
-        if row['hidden_by_admin'] else
-        InlineKeyboardButton('🚫 Скрыть для всех', callback_data=f'admin_hidden:hide:{surrogate_id}')
+        InlineKeyboardButton('✅ Показать для всех', callback_data=f'admin_hidden:show:{ref}')
+        if info['hidden'] else
+        InlineKeyboardButton('🚫 Скрыть для всех', callback_data=f'admin_hidden:hide:{ref}')
     )
 
     nav_row = [
@@ -416,30 +446,27 @@ async def handle_admin_hidden_action(
     pool = context.bot_data.get('pool')
     parts = query.data.split(':')
 
-    if len(parts) < 3 or not parts[2].isdigit():
+    parsed = parse_ref(parts[2]) if len(parts) >= 3 else None
+    if parsed is None:
         await query.answer('Неверный запрос', show_alert=True)
         return
 
     action = parts[1]
-    surrogate_id = int(parts[2])
-
     if action not in ('hide', 'show'):
         await query.answer('Неверное действие', show_alert=True)
         return
 
-    hidden = action == 'hide'
-
-    hidden = action == 'hide'
-    await pool.execute(f"""
-        UPDATE {Tables.MESSAGES}
-        SET hidden_by_admin = $1
-        WHERE surrogate_id = $2
-    """, hidden, surrogate_id)
+    admin_id = update.effective_user.id
+    kind, rid = parsed
+    if action == 'hide':
+        outcome = await hide_record(pool, kind, rid, admin_id)
+    else:
+        outcome = await show_record(pool, kind, rid, admin_id)    # скрытую AI запись закрепляет как reverted
 
     logger.info(
-        f"ADMIN_HIDDEN_ACTION | admin_id={update.effective_user.id} | "
-        f"action={action} | surrogate_id={surrogate_id}"
+        f"ADMIN_HIDDEN_ACTION | admin_id={admin_id} | action={action} | record={parts[2]} | ok={outcome.ok}"
     )
+    context.user_data['admin_hidden_notice'] = outcome.text
 
     await _show_admin_hidden_event(update, context, pool)
 

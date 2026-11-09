@@ -3,6 +3,7 @@ from loguru import logger
 from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton
 from telegram.ext import ContextTypes
 from db.tables import Tables
+from shared.config import config
 from shared.constants import (
     DUPLICATE_REVIEW_PREVIEW_LENGTH,
     DUPLICATE_QUICK_COMPARE_LENGTH,
@@ -18,6 +19,12 @@ async def handle_admin_duplicates(
     await query.answer()
 
     if not await _require_admin(update):
+        return
+
+    # ai / shadow — экран по решениям AI; legacy — прежний экран ниже
+    if (config.get('deduplication') or {}).get('method', 'legacy') in ('ai', 'shadow'):
+        from bot.handlers.admin_dedup_ai import start_decisions
+        await start_decisions(update, context, config['deduplication']['method'])
         return
 
     pool = context.bot_data.get('pool')

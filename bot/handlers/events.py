@@ -105,6 +105,7 @@ async def load_event_ids(
             FROM {Tables.EVENTS}
             WHERE starts_at BETWEEN $1 AND $2
             AND city = $4
+            AND hidden_by_admin = FALSE
             AND id NOT IN (
                 SELECT event_id FROM {Tables.EVENT_HIDDEN} WHERE user_id = $3
             )
