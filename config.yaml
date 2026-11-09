@@ -57,15 +57,26 @@ channels:
     - name: "@runningbeg"
       parser: "running_beg"
 
-opencode:
-  base_url: "https://opencode.ai/zen/go/v1"
-  models:
-    - "jev-1.13"
-    - "mimo-v2.6-flash-free"          # 30100 запросов/5ч — основная, самая ёмкая
-    - "deepseek-v4.1-flash-free"  # 7600/5ч — фолбэк (транслитерирует имена в кириллицу)
-    - "glm-5.3-flash"      # 6320/5ч — фолбэк
-    - "longcat-2.0"        # 11400/5ч — фолбэк
-  max_chars: 600
+translation:
+  method: shadow              # off | shadow (только лог TRANSLATE_SHADOW, модели не вызываются) | on
+  sources:                    # значения events.source; пусто = ничего не переводим
+    - efinityrs
+    - biletrs
+    - ticketsrs
+    - gigstix
+    - balkan-promo
+  models:                     # цепочка: при отказе отвечает СЛЕДУЮЩАЯ модель по списку
+    - deepseek-v4.1-flash
+    - gpt-6-luna
+    - glm-5.3-flash
+  max_chars: 600              # длина перевода до ссылки на билеты
+  input_chars: 1500           # сколько символов оригинала отправляем модели
+  concurrency: 3
+  only_upcoming: true         # события в прошлом не переводим
+  retry_minutes: 30           # повтор, если модели были недоступны
+  max_retries: 3
+  run_on_start: true          # один проход при старте сервиса (накопленное)
+
 
 
 parsing:
@@ -78,8 +89,11 @@ parsing:
   max_calls_per_run: 1000
   timeout: 120
   models:
-    - deepseek-v4.1-flash                 # основная
     - gpt-6-luna
+    - beam-free
+    - glm-5.3-flash
+    - mimo-v2.6-flash
+    - minimax-m3.1-flash
 
 deduplication:
   audit:
@@ -90,7 +104,7 @@ deduplication:
     raw_answers: true
   method: shadow
   ai:
-    models: [deepseek-v4.1-flash, gpt-6-luna, glm-5.3-flash, beam-free]
+    models: [deepseek-v4.1-flash, gpt-6-luna, beam-free, mimo-v2.6-flash, minimax-m3.1-flash]
     priority:
       - ch:1765919452   # @vstrechi_v_belgrade
       - ch:1530279711   # @sta_imas_beograd

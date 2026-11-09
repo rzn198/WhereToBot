@@ -58,12 +58,6 @@ async def _run_all_scrapers(pool) -> int:
 
     await health.report(list(results))
 
-    #try:
-        #from event_collector.translator import translate_new
-        #await translate_new(pool)
-    #except Exception as e:
-        #logger.error(f"EVENT_TRANSLATE_ERROR | {e}")
-
     logger.info(f"EVENT_RUN_DONE | total_saved={total}")
     return total
 
