@@ -90,6 +90,8 @@ def _parsing_section(y: dict, oc: dict) -> dict:
         'ai_trust_non_event': bool(y.get('ai_trust_non_event', False)),
         'max_chars': int(y.get('max_chars', 2000)),
         'max_calls_per_run': int(y.get('max_calls_per_run', 1000)),
+        'concurrency': max(1, int(y.get('concurrency', 4))),
+        'seen_retention_days': max(1, int(y.get('seen_retention_days', 60))),
         'timeout': float(y.get('timeout', 60)),
         'temperature': (float(y['temperature']) if y.get('temperature') is not None else None),
         'base_url': y.get('base_url') or oc['base_url'],

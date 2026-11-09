@@ -1,3 +1,4 @@
+import asyncio
 import json
 import asyncpg
 from dataclasses import replace
@@ -10,6 +11,7 @@ from telethon.tl.types import Message
 
 from collector.parsers.zarko_tusic import ZarkoTusicParser
 from collector.parsers.running_beg import RunningBegParser
+from db.ai_seen import load_seen, mark_seen, text_hash
 from collector.ai.service import ai_service
 from collector.categorizer_v2 import categorize
 from shared.categories import normalize_categories
@@ -63,6 +65,78 @@ def _is_expired(
         return published_at < now - timedelta(days=no_date_cleanup_days)
     return False
 
+_SAVED = 'saved'
+_SEEN = 'seen'
+
+
+def _channel_id(message: Message) -> int:
+    try:
+        return abs(message.peer_id.channel_id)
+    except (TelegramError, AttributeError):
+        return 0
+
+
+async def _prefetch_ai(pool, channel: str, parsed, retention, now) -> dict:
+    """Запросы к AI по всем постам канала сразу, parsing.concurrency одновременно.
+
+    Возвращает {(message_id, position): результат}, где результат —
+      _SAVED                      пост уже в messages: AI не нужен;
+      _SEEN                       пост уже оценён AI, текст не менялся (просроченные посты): AI не нужен;
+      (дата, категории, ответил)  ответ AI (resolve_full).
+    Посты, которым AI не нужен вообще, в словарь не попадают.
+    """
+    jobs = []
+    for message, events, published_at in parsed:
+        channel_id = _channel_id(message)
+        for event in events:
+            if not ai_service.decides_date(channel) and retention is not None and _is_expired(
+                event.date, published_at, now, *retention,
+            ):
+                continue
+            if ai_service.needs_ai(event.text, channel, event.position):
+                jobs.append((message, event, published_at, channel_id))
+    if not jobs:
+        return {}
+
+    result: dict = {}
+    by_channel: dict[int, list[int]] = {}
+    for message, _e, _p, channel_id in jobs:
+        by_channel.setdefault(channel_id, []).append(message.id)
+    seen: dict[tuple[int, int, int], str] = {}
+    for channel_id, ids in by_channel.items():
+        for (mid, pos), h in (await load_seen(pool, channel_id, sorted(set(ids)))).items():
+            seen[(channel_id, mid, pos)] = h
+
+    todo = []
+    for message, event, published_at, channel_id in jobs:
+        key = (message.id, event.position)
+        try:
+            if await _already_saved(pool, channel_id, message.id, event.position):
+                result[key] = _SAVED
+                continue
+        except Exception as e:
+            logger.error(f"DB_ERROR | channel={channel} msg_id={message.id} | {e}")
+            continue
+        if seen.get((channel_id, message.id, event.position)) == text_hash(event.text):
+            result[key] = _SEEN
+            continue
+        todo.append((key, message, event, published_at))
+
+    sem = asyncio.Semaphore(max(1, getattr(ai_service, 'concurrency', 1)))
+
+    async def ask(key, message, event, published_at):
+        async with sem:
+            result[key] = await ai_service.resolve_full(
+                text=event.text, channel=channel, position=event.position,
+                published_at=published_at.date(), regex_date=event.date,
+                dict_types=categorize(event.text, channel, position=event.position),
+            )
+
+    if todo:
+        await asyncio.gather(*(ask(*t) for t in todo))
+    return result
+
+
 async def fetch_new_messages(
     client: TelegramClient,
     channel: str,
@@ -77,6 +151,7 @@ async def fetch_new_messages(
     parser = get_parser_for_channel(channel)
     saved = 0
     skipped_expired = 0
+    skipped_seen = 0
     retention = _retention_days()
     if retention is None:
         logger.warning(
@@ -98,10 +173,11 @@ async def fetch_new_messages(
 
     await _register_channel(pool, entity)
 
+    # 1) разбор постов; 2) параллельные запросы к AI по тем, кого надо оценить; 3) сохранение
+    parsed: list[tuple[Message, list[ParsedEvent], datetime]] = []
     for message in messages:
         if not isinstance(message, Message) or not message.message:
             continue
-
         try:
             events = parser.parse(message)
         except Exception as e:
@@ -109,9 +185,11 @@ async def fetch_new_messages(
                 f"PARSE_ERROR | channel={channel} msg_id={message.id} | {e}"
             )
             continue
+        parsed.append((message, events, message.date.replace(tzinfo=timezone.utc)))
 
-        published_at = message.date.replace(tzinfo=timezone.utc)
+    prefetched = await _prefetch_ai(pool, channel, parsed, retention, now)
 
+    for message, events, published_at in parsed:
         for event in events:
             # AI определяет дату → «просрочено?» проверяем после ответа AI, иначе до (дешевле)
             ai_dates = ai_service.decides_date(channel)
@@ -122,27 +200,35 @@ async def fetch_new_messages(
                 continue
 
             try:
-                try:
-                    channel_id = abs(message.peer_id.channel_id)
-                except TelegramError:
-                    channel_id = 0
+                channel_id = _channel_id(message)
+                key = (message.id, event.position)
 
                 event_types = categorize(event.text, channel, position=event.position)
 
                 if ai_service.needs_ai(event.text, channel, event.position):
-                    # уже сохранённые посты не отправляем в AI повторно (платные запросы)
-                    if await _already_saved(pool, channel_id, message.id, event.position):
+                    pre = prefetched.get(key)
+                    if pre is None:
+                        # не попал в предзагрузку (не должно случаться) — спрашиваем здесь
+                        if await _already_saved(pool, channel_id, message.id, event.position):
+                            continue
+                        pre = await ai_service.resolve_full(
+                            text=event.text, channel=channel, position=event.position,
+                            published_at=published_at.date(), regex_date=event.date,
+                            dict_types=event_types,
+                        )
+                    elif pre == _SAVED:
+                        continue              # уже сохранён: платные запросы не повторяем
+                    elif pre == _SEEN:
+                        skipped_seen += 1     # уже оценён AI раньше (просроченный пост), текст не менялся
                         continue
-                    new_date, event_types = await ai_service.resolve(
-                        text=event.text, channel=channel, position=event.position,
-                        published_at=published_at.date(), regex_date=event.date,
-                        dict_types=event_types,
-                    )
+                    new_date, event_types, answered = pre
                     event = replace(event, date=new_date)
                     if ai_dates and retention is not None and _is_expired(
                         event.date, published_at, now, *retention,
                     ):
                         skipped_expired += 1
+                        if answered:
+                            await mark_seen(pool, channel_id, message.id, event.position, event.text)
                         continue
 
                 surrogate_id = await _save_event(
@@ -184,7 +270,7 @@ async def fetch_new_messages(
 
     logger.info(
         f"Saved {saved} new events from {channel} "
-        f"(skipped_expired={skipped_expired})"
+        f"(skipped_expired={skipped_expired}, skipped_seen={skipped_seen})"
     )
     return saved
 

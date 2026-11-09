@@ -88,6 +88,8 @@ parsing:
   max_chars: 2000
   max_calls_per_run: 1000
   timeout: 120
+  concurrency: 4
+  seen_retention_days: 60
   models:
     - gpt-5.6-luna
     - gpt-6-luna
@@ -106,7 +108,7 @@ deduplication:
     raw_answers: true
   method: shadow
   ai:
-    models: [deepseek-v4.1-flash, gpt-6-luna, beam-free, mimo-v2.6-flash, minimax-m3.1-flash]
+    models: [deepseek-v4.1-flash, gpt-6-luna, beam-free, mimo-v2.6-flash, minimax-m3.1-flash, gpt-5.6-luna]
     priority:
       - event:efinityrs
       - event:biletrs
