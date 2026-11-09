@@ -41,10 +41,10 @@ ui:
   cinema_menu_photo_file_id: "AgACAgIAAxkBAAEpzcJqGW98fiwpQcCwDjwWnuO9ncf-cgACnxprGwM-yEg0mA17sy6jJwEAAwIAA3MAAzsE"
 
 cinema_collector:
-  parse_interval_hours: 6
+  parse_interval_hours: 8
 
 event_collector:
-  parse_interval_hours: 6
+  parse_interval_hours: 8
   detail_concurrency: 5
 
 Menu text:
@@ -132,3 +132,5 @@ deduplication:
       - ch:1765919452   # @vstrechi_v_belgrade — Встречи в Белграде (афиша мероприятий)
       - ch:1530279711   # @sta_imas_beograd — Что там в Белграде?
       - ch:2195736208   # @free_belgrade — Free Belgrade / Бесплатный Белград
+      - ch:1869378987   # @afisha_rs — АФИША Белграда
+      - ch:1855294969   # @soroka_beloboka_rs — Сорока-белобока.rs
