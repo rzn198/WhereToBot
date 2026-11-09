@@ -106,9 +106,10 @@ deduplication:
     rotation_mb: 50
     retention_days: 90
     raw_answers: true
-  method: shadow
+    history_days: 60
+  method: ai
   ai:
-    models: [deepseek-v4.1-flash, gpt-6-luna, beam-free, mimo-v2.6-flash, minimax-m3.1-flash, gpt-5.6-luna]
+    models: [deepseek-v4.1-flash, gpt-6-luna, gpt-5.6-luna, beam-free, mimo-v2.6-flash, minimax-m3.1-flash]
     priority:
       - event:efinityrs
       - event:biletrs

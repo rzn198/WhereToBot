@@ -144,6 +144,7 @@ async def _show_calendar(
                 FROM {Tables.EVENTS}
                 WHERE starts_at >= CURRENT_DATE
                 AND city = $1
+                AND hidden_by_admin = FALSE
             ) t
         """, EVENTS_CITY)
     dates_with_events = set(row['dates'] or [])

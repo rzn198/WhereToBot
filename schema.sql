@@ -261,3 +261,20 @@ CREATE TABLE IF NOT EXISTS collector_runs (
     status        TEXT         NOT NULL DEFAULT 'running' CHECK (status IN ('running', 'ok', 'error'))
 );
 CREATE INDEX IF NOT EXISTS idx_collector_runs_service_started ON collector_runs (service, started_at DESC);
+
+-- 009: «пост уже оценён AI-парсингом» (просроченные посты не попадают в messages)
+CREATE TABLE IF NOT EXISTS ai_parse_seen (
+    channel_id  BIGINT       NOT NULL,
+    message_id  BIGINT       NOT NULL,
+    position    INT          NOT NULL DEFAULT 0,
+    text_hash   TEXT         NOT NULL,
+    seen_at     TIMESTAMPTZ  NOT NULL DEFAULT now(),
+    PRIMARY KEY (channel_id, message_id, position)
+);
+
+CREATE INDEX IF NOT EXISTS idx_ai_parse_seen_seen_at ON ai_parse_seen (seen_at);
+
+-- 010: видимые события для ленты и календаря
+CREATE INDEX IF NOT EXISTS idx_events_city_starts_visible
+    ON events (city, starts_at) INCLUDE (id, created_at)
+    WHERE hidden_by_admin = FALSE;

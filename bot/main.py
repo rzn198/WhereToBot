@@ -54,6 +54,7 @@ from bot.handlers.admin_duplicates import (
     handle_admin_duplicates,
     handle_dedup_action,
 )
+from bot.handlers.admin_dedup_ai import handle_dd_action, handle_dd_nav
 from bot.handlers.admin_panel import (
     handle_admin_panel,
     handle_admin_restart,
@@ -214,6 +215,8 @@ async def main():
 
     app.add_handler(CallbackQueryHandler(handle_admin_duplicates, pattern='^admin:duplicates$'))
     app.add_handler(CallbackQueryHandler(handle_dedup_action, pattern='^dedup:'))
+    app.add_handler(CallbackQueryHandler(handle_dd_nav, pattern='^dd:nav:'))
+    app.add_handler(CallbackQueryHandler(handle_dd_action, pattern=r'^dd:(rv|sw):\d+$'))
 
     app.add_handler(CallbackQueryHandler(handle_admin_panel, pattern='^admin_panel:main$'))
 

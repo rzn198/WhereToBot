@@ -66,11 +66,12 @@ MESSAGES_FUTURE = f"""
     AND surrogate_id NOT IN (SELECT msg_id FROM {Tables.HIDDEN_EVENTS} WHERE user_id = $1)
 """
 
-# Будущие события сайтов: только выбранный город, не скрытые пользователем.
+# Будущие события сайтов: только выбранный город, не скрытые админом (дубли) и не скрытые пользователем.
 EVENTS_FUTURE = f"""
     starts_at >= CURRENT_DATE
     AND starts_at <= CURRENT_DATE + make_interval(days => $3)
     AND city = $2
+    AND hidden_by_admin = FALSE
     AND id NOT IN (SELECT event_id FROM {Tables.EVENT_HIDDEN} WHERE user_id = $1)
 """
 
