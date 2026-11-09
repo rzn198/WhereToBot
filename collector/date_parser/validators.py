@@ -1,9 +1,9 @@
 from datetime import datetime, date
 
 
-def is_valid_date(day: int, month: int, year: int) -> bool:
+def is_valid_date(day: int, month: int, year: int, ref_year: int | None = None) -> bool:
 
-    current_year = datetime.now().year
+    current_year = ref_year if ref_year is not None else datetime.now().year
 
     if not (1 <= month <= 12):
         return False
