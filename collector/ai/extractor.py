@@ -10,7 +10,7 @@ from __future__ import annotations
 import json
 import re
 from dataclasses import dataclass, field
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 
 from loguru import logger
 
@@ -105,7 +105,7 @@ def _load_json(raw: str) -> dict:
     return data
 
 
-def parse_response(raw: str, allowed: list[str]) -> AIResult:
+def parse_response(raw: str, allowed: list[str], published_at: date | None = None) -> AIResult:
     data = _load_json(raw)
     if "date" not in data or "categories" not in data:
         raise BadAIOutput("нет полей date/categories")
@@ -119,7 +119,11 @@ def parse_response(raw: str, allowed: list[str]) -> AIResult:
             out_date = date.fromisoformat(raw_date.strip())
         except ValueError:
             raise BadAIOutput(f"date не ISO: {raw_date!r}")
-        if not is_valid_date(out_date.day, out_date.month, out_date.year):
+        # допустимый год считаем от даты публикации поста, а не от сегодняшнего дня:
+        # старый пост (2024) с датой 2024 — нормальный ответ, он просто окажется просроченным
+        ref_year = published_at.year if published_at else datetime.now().year
+        if not (ref_year - 1 <= out_date.year <= ref_year + 2) or not is_valid_date(
+                out_date.day, out_date.month, out_date.year, ref_year=ref_year):
             raise BadAIOutput(f"date вне допустимого диапазона: {raw_date}")
 
     cats = data["categories"]
@@ -146,7 +150,7 @@ async def extract(client: AIClient, text: str, published_at: date,
     """Запрос + проверка. AIUnavailable поднимается клиентом, BadAIOutput — здесь."""
     raw = await client.complete(SYSTEM_PROMPT, build_user_prompt(text, published_at, allowed, max_chars))
     try:
-        result = parse_response(raw, allowed)
+        result = parse_response(raw, allowed, published_at)
     except BadAIOutput as e:
         client.report_bad_output()
         logger.warning(f"AI_BAD_OUTPUT | {e} | raw={raw[:200]!r}")
