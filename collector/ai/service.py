@@ -74,6 +74,7 @@ class AIParsingService:
         self.trust_non_event = bool(cfg.get('ai_trust_non_event', False))
         self.max_chars = int(cfg.get('max_chars', 2000))
         self.max_calls = int(cfg.get('max_calls_per_run', 1000))
+        self.concurrency = max(1, int(cfg.get('concurrency', 4)))
         self._custom = self._custom or set()
         if self._client is None and (self.date_mode != 'regex' or self.cat_mode != 'dict'):
             self._client = client_from_config('parsing', cfg)
@@ -133,25 +134,34 @@ class AIParsingService:
     async def resolve(self, *, text: str, channel: str, position: int, published_at: date,
                       regex_date: date | None, dict_types: list[str]) -> tuple[date | None, list[str]]:
         """(дата, категории) для сохранения. Никогда не бросает исключений."""
+        d, t, _ = await self.resolve_full(text=text, channel=channel, position=position,
+                                          published_at=published_at, regex_date=regex_date, dict_types=dict_types)
+        return d, t
+
+    async def resolve_full(self, *, text: str, channel: str, position: int, published_at: date,
+                           regex_date: date | None, dict_types: list[str]
+                           ) -> tuple[date | None, list[str], bool]:
+        """(дата, категории, ответил_ли_AI). Никогда не бросает исключений.
+        Третье значение False — AI не вызывался или не ответил (сбой, лимит, нет ключа): пост не считается оценённым."""
         try:
             self._init()
             return await self._resolve(text, channel, position, published_at, regex_date, dict_types)
         except Exception as e:
             self.counters['fallback'] += 1
             logger.error(f"AI_PARSING_ERROR | channel={channel} | {type(e).__name__}: {e} — прежняя логика")
-            return regex_date, dict_types
+            return regex_date, dict_types, False
 
     async def _resolve(self, text, channel, position, published_at, regex_date, dict_types):
         forced = categorize_forced(text, channel, position) is not None
         want_date = self.date_mode != 'regex' and not self._is_custom_channel(channel)
         want_cat = self.cat_mode != 'dict' and not forced
         if not (want_date or want_cat):
-            return regex_date, dict_types
+            return regex_date, dict_types, False
 
         result = await self._ask(text, published_at)
         if result is None:
             self.counters['fallback'] += 1
-            return regex_date, dict_types
+            return regex_date, dict_types, False
         self.counters['resolved'] += 1
 
         out_date, out_types = regex_date, dict_types
@@ -188,7 +198,7 @@ class AIParsingService:
                     out_types = result.categories
                     self.counters['ai_cats'] += 1
 
-        return out_date, out_types
+        return out_date, out_types, True
 
     async def _ask(self, text: str, published_at: date):
         client = self._client
