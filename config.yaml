@@ -79,20 +79,20 @@ translation:
   max_retries: 3
   run_on_start: true          # один проход при старте сервиса (накопленное)
 
-
-
 parsing:
-  date_method: shadow
-  category_method: shadow
+  date_method: ai
+  category_method: ai
   ai_null_date_fallback: true
   ai_empty_categories_fallback: true
-  ai_trust_non_event: false      # включим позже, по логам AI_NON_EVENT
+  ai_trust_non_event: true
   max_chars: 2000
   max_calls_per_run: 1000
   timeout: 120
   models:
     - gpt-6-luna
+    - gpt-5.6-luna
     - beam-free
+    - deepseek-v4.1-flash
     - glm-5.3-flash
     - mimo-v2.6-flash
     - minimax-m3.1-flash
