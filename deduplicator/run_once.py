@@ -96,7 +96,7 @@ async def run_once(pool, cfg: dict, args, *, client=None, send=None, out=print) 
         out(f"Прогон не выполнен ({res.status}): {res.error}")
         return 1
     out(f"Готово: method={method} · дат {st.get('dates_processed')}/{st.get('dates_total')} · запросов {st.get('requests')} "
-        f"· групп {st.get('groups_found')} · скрыто {st.get('hidden')} · возвращено {st.get('unhidden')} "
+        f"· групп {st.get('groups_found')} · скрыто {st.get('hidden')} · возвращено {st.get('unhidden')} · сохранено прежних пар {st.get('sticky', 0)} "
         f"· плохих дат {st.get('bad_days')} · пропущено по лимиту {st.get('skipped_days')}")
     if not args.no_alert and cfg.get('service', {}).get('alerts', True):
         text = notify.run_report(res, method)

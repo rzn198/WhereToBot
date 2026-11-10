@@ -11,8 +11,13 @@
     По иерархии победитель выбирается только у новой группы или когда прежний победитель пропал/скрыт/сменил дату;
   * строки дайджестов (position > 0) могут побеждать, но сами не скрываются (в одной строке — целый
     день событий, скрыть её из-за одного дубля нельзя);
-  * «воскрешение»: если группа распалась, победитель пропал, скрыт вручную или сменил дату —
-    проигравший снова виден; следующий по иерархии становится победителем при пересчёте группы;
+  * «липкие пары»: действующее решение (проигравший скрыт победителем) не снимается только потому, что при пересчёте
+    даты AI не повторил группу: модель отвечает нестабильно, и вернуть дубль в ленту из-за этого нельзя. Пара держится,
+    пока целы обе записи, победитель виден и не проиграл другой записи, а проигравший не стал дайджестом/перечнем
+    или победителем другой группы;
+  * «воскрешение»: если победитель пропал, скрыт вручную или сменил дату, проигравший или победитель стали
+    перечнем/дайджестом, либо админ вернул запись — проигравший снова виден; следующий по иерархии
+    становится победителем при пересчёте группы;
   * проигравший, которого админ вернул (он снова виден при действующем решении), закрепляется
     как reverted и больше не скрывается AI; решения админа (decided_by='admin') AI не пересчитывает.
 """
@@ -61,6 +66,7 @@ class DayPlan:
     hide: list[Key] = field(default_factory=list)
     unhide: list[Key] = field(default_factory=list)
     kept: int = 0
+    sticky: list = field(default_factory=list)               # решения, оставленные без изменений, хотя AI не повторил группу
     group_winners: list = field(default_factory=list)        # победитель по каждой группе (в порядке groups): Key | None
     merged: dict = field(default_factory=dict)               # ключ вытесненного победителя → ключ победителя-хозяина
     pinned: set = field(default_factory=set)                  # админ вернул проигравшего: AI его больше не скрывает
@@ -200,6 +206,22 @@ def plan_day(day: date, records: list[Record], groups: list[Group], live: list[L
     for key, d in active.items():
         if key in wanted or key in locked:
             continue
+        if _sticky(recs.get(key), recs.get(d.winner), plan, wanted, winners):
+            plan.sticky.append(d)        # AI не повторил группу, но пара остаётся: проигравший так же скрыт
+            continue
         plan.stale.append(d.id)
         plan.unhide.append(key)          # запись могла пропасть или уехать на другую дату — тогда это no-op
     return plan
+
+
+def _sticky(loser: Record | None, winner: Record | None, plan: DayPlan, wanted: dict, winners: set) -> bool:
+    """Можно ли оставить действующее решение, которого нет в новом ответе AI.
+    Нужно, чтобы обе записи были на месте (иначе запись пропала или сменила дату), победитель оставался видимым,
+    не проигрывал другой записи и мог побеждать, а проигравший не стал победителем другой группы, дайджестом или перечнем."""
+    if loser is None or winner is None:
+        return False
+    if winner.hidden or winner.key in wanted or winner.key in plan.lists or winner.is_list:
+        return False
+    if loser.key in winners or loser.is_digest or loser.is_list or loser.key in plan.lists:
+        return False
+    return True

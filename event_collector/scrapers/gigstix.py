@@ -43,6 +43,7 @@ SERBIAN_MONTHS = {
     "septembra": 9, "oktobra": 10, "novembra": 11, "decembra": 12,
 }
 
+_ABOUT_TITLE = re.compile(r"\s*(o\s+doga(?:đ|dj?)aju|about(\s+the)?\s+event|description|opis)", re.IGNORECASE)
 _ICS_RE = re.compile(
     r"gt_event_ics\.addEvent\(\s*'[^']*',\s*'[^']*',\s*'[^']*',\s*'([^']*)'"
 )
@@ -224,11 +225,28 @@ class GigstixScraper(BaseScraper):
         return n.text(strip=True) or None if n else None
 
     def _extract_description(self, tree) -> str | None:
+        """Описание — секция «O događaju» (.gt-section[data-gt-type=content] с заголовком .gt-section-title).
+        Раньше брали первый `.gt-page-content .gt-content`, а это строка заголовка «Название | 20.11. | Площадка»
+        (74 символа) — полный текст терялся. Если заголовок секции не узнан, берём самый длинный блок среди секций
+        контента (блок с ценами и кнопками билетов короткий), затем старые селекторы."""
+        blocks: list[tuple[str, object]] = []
+        for sec in tree.css('.gt-event-sections [data-gt-type="content"]'):
+            node = sec.css_first(".gt-content")
+            if node is None:
+                continue
+            title = sec.css_first(".gt-section-title")
+            blocks.append(((title.text(strip=True) if title else ""), node))
+        for title, node in blocks:
+            if _ABOUT_TITLE.match(title):
+                text = clean_html(node.html)
+                if text:
+                    return text
+        best = max((clean_html(n.html) or "" for _, n in blocks), key=len, default="")
+        if best:
+            return best
         node = (tree.css_first(".gt-page-content .gt-content") or
                 tree.css_first('[data-gt-type="content"] .gt-content'))
-        if not node:
-            return None
-        return clean_html(node.html)
+        return clean_html(node.html) if node else None
 
     def _parse_ics(self, html: str) -> datetime | None:
         m = _ICS_RE.search(html)

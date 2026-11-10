@@ -69,7 +69,6 @@ translation:
     - glm-5.3-flash
     - gpt-6-luna
     - deepseek-v4.1-flash
-    - glm-5.3-flash
     - beam-free
   max_chars: 600              # длина перевода до ссылки на билеты
   input_chars: 1500           # сколько символов оригинала отправляем модели
