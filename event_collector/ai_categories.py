@@ -114,10 +114,11 @@ class Counters:
     failed: int = 0
     disagree: int = 0
     changed: int = 0
+    answered: set = field(default_factory=set)  # source_url событий, по которым есть ответ AI (или кэш)
     diffs: list = field(default_factory=list)   # (title, url, было, AI) — для разбора в refresh_source
 
     def line(self) -> str:
-        return " ".join(f"{k}={v}" for k, v in self.__dict__.items() if k != 'diffs')
+        return " ".join(f"{k}={v}" for k, v in self.__dict__.items() if k not in ('diffs', 'answered'))
 
 
 class EventCategoryAI:
@@ -231,6 +232,7 @@ class EventCategoryAI:
             ai = answers.get(idx)
             if not ai:
                 continue
+            c.answered.add(it.source_url)
             final = merge_categories(it, ai)
             if set(final) != set(it.event_types):
                 c.disagree += 1
