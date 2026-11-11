@@ -278,3 +278,14 @@ CREATE INDEX IF NOT EXISTS idx_ai_parse_seen_seen_at ON ai_parse_seen (seen_at);
 CREATE INDEX IF NOT EXISTS idx_events_city_starts_visible
     ON events (city, starts_at) INCLUDE (id, created_at)
     WHERE hidden_by_admin = FALSE;
+
+-- 011: кэш AI-категорий событий сайтов
+CREATE TABLE IF NOT EXISTS event_ai_categories (
+    source       TEXT         NOT NULL,
+    source_url   TEXT         NOT NULL,
+    text_hash    TEXT         NOT NULL,
+    categories   TEXT[]       NOT NULL DEFAULT '{}',
+    model        TEXT,
+    decided_at   TIMESTAMPTZ  NOT NULL DEFAULT now(),
+    PRIMARY KEY (source, source_url)
+);

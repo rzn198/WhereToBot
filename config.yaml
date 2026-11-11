@@ -46,6 +46,15 @@ cinema_collector:
 event_collector:
   parse_interval_hours: 8
   detail_concurrency: 5
+  categories: # AI-категоризация событий сайтов (efinityrs, biletrs, ticketsrs, gigstix, polako, ticrs, balkan-promo)
+    method: source            # source — как отдал скрейпер | shadow — AI считается, пишется EVENT_AI_CAT_DISAGREE, в БД прежнее | ai
+    scope: unreliable         # unreliable — только где категорию не дал сам сайт | all — все события
+    models: [ gpt-5.6-luna ]    # цепочка: при отказе — следующая
+    timeout: 60
+    max_chars: 1200
+    concurrency: 3
+    max_calls_per_run: 600
+
 
 Menu text:
   "Афиша белграда. Все события в одном месте!"

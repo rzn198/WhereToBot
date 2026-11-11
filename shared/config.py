@@ -49,8 +49,35 @@ def load_config() -> dict:
     cfg['translation'] = _translation_section(cfg.get('translation') or {}, cfg['opencode'])
     cfg['parsing'] = _parsing_section(cfg.get('parsing') or {}, cfg['opencode'])
     cfg['deduplication'] = _dedup_section(cfg.get('deduplication') or {}, cfg['opencode'])
+    cfg['event_categories'] = _event_categories_section((cfg.get('event_collector') or {}).get('categories') or {}, cfg['opencode'])
 
     return cfg
+
+
+EVENT_CATEGORY_METHODS = ('source', 'shadow', 'ai')
+EVENT_CATEGORY_SCOPES = ('unreliable', 'all')
+
+
+def _event_categories_section(y: dict, oc: dict) -> dict:
+    """Категории событий сайтов (event_collector.categories).
+    method: source (как отдаёт скрейпер, AI не вызывается) | shadow (AI считается и сравнивается, в БД прежнее) | ai.
+    scope:  unreliable (только события, где скрейпер не получил категорию с сайта: подстановка, словарь, пусто)
+            | all (все события).
+    Ключ: OPENCODE_EVENTS_API_KEY, если не задан — OPENCODE_PARSING_API_KEY."""
+    method = (os.getenv('EVENT_CATEGORY_METHOD') or y.get('method') or 'source').strip().lower()
+    scope = (os.getenv('EVENT_CATEGORY_SCOPE') or y.get('scope') or 'unreliable').strip().lower()
+    return {
+        'method': method if method in EVENT_CATEGORY_METHODS else 'source',
+        'scope': scope if scope in EVENT_CATEGORY_SCOPES else 'unreliable',
+        'models': list(y.get('models') or []),
+        'base_url': y.get('base_url') or oc['base_url'],
+        'api_key': os.getenv('OPENCODE_EVENTS_API_KEY') or os.getenv('OPENCODE_PARSING_API_KEY', ''),
+        'timeout': float(y.get('timeout', 60)),
+        'temperature': (float(y['temperature']) if y.get('temperature') is not None else None),
+        'max_chars': int(y.get('max_chars', 1200)),
+        'concurrency': max(1, int(y.get('concurrency', 3))),
+        'max_calls_per_run': int(y.get('max_calls_per_run', 600)),
+    }
 
 
 TRANSLATION_METHODS = ('off', 'shadow', 'on')

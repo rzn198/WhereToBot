@@ -37,6 +37,17 @@ CATEGORY_MAP = {
     # dogadjaj / istaknuti-dogadjaji -> пропускаем (не тип события)
 }
 
+# «koncert» и «pozoriste» на сайте широкие (туда попадают балет, детские спектакли, монологи) —
+# такие события помечаем aggregate, их проверяет AI. Узкие категории надёжны.
+_BROAD_CATEGORIES = {"Концерты", "Кино/Театр"}
+
+
+def _basis(event_types: list[str]) -> str:
+    if not event_types:
+        return 'none'
+    return 'aggregate' if _BROAD_CATEGORIES & set(event_types) else 'site'
+
+
 SERBIAN_MONTHS = {
     "januara": 1, "februara": 2, "marta": 3, "aprila": 4,
     "maja": 5, "juna": 6, "jula": 7, "avgusta": 8,
@@ -216,6 +227,8 @@ class GigstixScraper(BaseScraper):
             city=city,
             country="RS",
             event_types=event_types,
+            category_basis=_basis(event_types),
+            category_hint=("категории сайта: " + ", ".join(event_types)) if event_types else None,
             images=images,
             dedup_key=build_dedup_key(title, starts_at, city),
         )

@@ -2,6 +2,7 @@ import asyncpg
 from loguru import logger
 
 from db.ai_seen import purge_old
+from db.event_ai_cache import purge_orphans
 from db.tables import Tables
 from event_collector.retention import get_window
 from shared.config import config
@@ -117,6 +118,7 @@ async def run_cleanup(pool: asyncpg.Pool) -> dict:
             """, events_past_days, events_future_days))
 
     seen_purged = await purge_old(pool, int((config.get('parsing') or {}).get('seen_retention_days', 60)))
+    event_cats = await purge_orphans(pool)
     history = await purge_dedup_history(pool, int((config.get('deduplication') or {}).get('history_days', 60)))
 
     no_date_count = sum(1 for r in rows if r['no_date'])
@@ -126,7 +128,7 @@ async def run_cleanup(pool: asyncpg.Pool) -> dict:
     logger.info(
         f"CLEANUP | dated={dated_count} | no_date={no_date_count} | "
         f"held_by_dup_refs={held_count} | alerts_detached={alerts_detached} | "
-        f"events={events_deleted} | ai_seen={seen_purged} | dedup_history={history}"
+        f"events={events_deleted} | ai_seen={seen_purged} | event_ai_categories={event_cats} | dedup_history={history}"
     )
 
     return {
@@ -136,5 +138,6 @@ async def run_cleanup(pool: asyncpg.Pool) -> dict:
         'alerts_detached': alerts_detached,
         'events': events_deleted,
         'ai_seen': seen_purged,
+        'event_ai_categories': event_cats,
         'dedup_history': history,
     }
