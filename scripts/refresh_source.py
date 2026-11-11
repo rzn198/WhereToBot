@@ -9,6 +9,10 @@ hidden_by_admin и решения дедупликатора.
 
 --dry-run: ничего не пишет, показывает сколько описаний изменится и несколько примеров «было → стало».
 
+Рекатегоризация БЕЗ AI по новым правилам скрейпера (как давать сухой прогон, потом боевой):
+    ... refresh_source.py efinityrs --ai source --dry-run     # покажет «категории изменятся у N», примеры было → стало
+    ... refresh_source.py efinityrs --ai source               # применить
+
 AI-категории на разовый запуск, без правки config.yaml:
     ... refresh_source.py ticketsrs --dry-run --ai shadow --scope all    # посмотреть, что изменил бы AI на ВСЕХ событиях
     ... refresh_source.py ticketsrs --ai ai --scope all                  # применить к ВСЕМ событиям источника
@@ -30,6 +34,20 @@ from db.connection import close_db_pool, init_db_pool  # noqa: E402
 from event_collector.runner import SCRAPERS, _call_fetch  # noqa: E402
 from event_collector.saver import save_events  # noqa: E402
 from shared.logging import setup_logging  # noqa: E402
+
+
+def _print_category_changes(items, old_types: dict, limit: int) -> None:
+    """Сколько событий сменят категории относительно БД (после применения AI, если он был) и примеры «было → стало»."""
+    changed = [(it, old_types[it.source_url]) for it in items
+               if it.source_url in old_types and set(it.event_types) != set(old_types[it.source_url])]
+    print(f"\nКатегории изменятся у {len(changed)} из {sum(1 for i in items if i.source_url in old_types)} событий в базе")
+    for it, was in changed[:limit]:
+        print(f"  {it.title[:60]!r}: {was} → {it.event_types}")
+    if len(changed) > limit:
+        print(f"  ... и ещё {len(changed) - limit}")
+    empty = [it for it in items if not it.event_types]
+    if empty:
+        print(f"Без категории после обновления: {len(empty)} (в лентах категорий не видны)")
 
 
 def _category_ai(args):
@@ -57,8 +75,10 @@ async def run(args) -> int:
         scraper = cls()
         items = await _call_fetch(scraper, {})          # пустой known — читаем все страницы
         print(f"Прочитано страниц: {len(items)}")
-        old = {r['source_url']: r['description'] for r in await pool.fetch(
-            "SELECT source_url, description FROM events WHERE lower(source) = $1", args.source.lower())}
+        rows = await pool.fetch(
+            "SELECT source_url, description, event_types FROM events WHERE lower(source) = $1", args.source.lower())
+        old = {r['source_url']: r['description'] for r in rows}
+        old_types = {r['source_url']: list(r['event_types'] or []) for r in rows}
         changed = [(it, old[it.source_url]) for it in items
                    if it.source_url in old and (it.description or '') != (old[it.source_url] or '')]
         grew = [c for c in changed if len(c[0].description or '') > len(c[1] or '')]
@@ -69,11 +89,15 @@ async def run(args) -> int:
             print(f"\n  {it.source_url}\n    было  ({len(was or '')}): {(was or '')[:90]!r}\n"
                   f"    стало ({len(it.description or '')}): {(it.description or '')[:90]!r}")
         ai = _category_ai(args)
+        # категории: при --ai source итог известен уже сейчас; с AI покажем после его ответа
+        if not ai.enabled:
+            _print_category_changes(items, old_types, args.examples * 6)
         if ai.enabled:
             counters = await ai.apply(pool, items)
             print(f"\nAI-категории ({ai.mode}/{ai.scope}): {counters.line()}")
             for title, url, was, now in counters.diffs[:args.examples * 4]:
                 print(f"  {title[:60]!r}: {was} → {now}")
+            _print_category_changes(items, old_types, args.examples * 6)
         if args.dry_run:
             print("\nСухой прогон: в базу ничего не записано (кэш AI-ответов мог пополниться).")
             return 0
