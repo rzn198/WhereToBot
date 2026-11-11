@@ -19,6 +19,11 @@ class EventItem:
     event_types:   list[str] = field(default_factory=list)
     images:        str | None = None
     dedup_key:     str | None = None
+    # Откуда категории: site — по категориям самого сайта (надёжно); fixed — константа источника;
+    # dict — словарь по тексту; aggregate — грубая категория широкого раздела сайта; default — подстановка скрейпера, когда сайт категорию не дал; none — пусто.
+    category_basis: str = 'site'
+    # Исходные категории сайта текстом («THEATRE / MONODRAMA») — подсказка для AI-категоризации
+    category_hint: str | None = None
 
 
 class BaseScraper:

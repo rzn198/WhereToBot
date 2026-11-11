@@ -214,6 +214,7 @@ class TicRsScraper(BaseScraper):
             city="Belgrade",
             country="RS",
             event_types=event_types,
+            category_basis='dict' if event_types else 'none',
             images=card["image"],
             dedup_key=build_dedup_key(title, card["starts_at"], "Belgrade"),
         )

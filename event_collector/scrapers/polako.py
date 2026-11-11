@@ -50,7 +50,29 @@ API_FIELDS = ",".join([
     "translations.language",
     "translations.image_cover.id", "translations.image_cover.filename_disk",
     "description",
+    "category.name",
 ])
+
+# Категории сайта (category.name в API) -> категории бота. None — по названию не определить
+# («Шоу и перформансы»: цирк, мюзикл, магия...): такое событие идёт через словарь по тексту и AI.
+CATEGORY_MAP: dict[str, str | None] = {
+    "Концерты": "Концерты",
+    "Вечеринки и клубные события": "Концерты",      # как Žurke у biletrs
+    "Shuma Dj": "Концерты",
+    "Театр и спектакли": "Кино/Театр",
+    "Кино и показы": "Кино/Театр",
+    "Выставки": "Выставки/Ярмарки",
+    "Market": "Выставки/Ярмарки",
+    "Фестивали": "Фестивали",
+    "Лекции и встречи": "Мастер-классы/Нетворкинг",
+    "Мастер-классы": "Мастер-классы/Нетворкинг",
+    "Детские мероприятия": "Семейные/детские",
+    "Экскурсии и туры": "Поездки и экскурсии",
+    "Stand-up и юмор": "Игры и развлечения",
+    "Квиз": "Игры и развлечения",
+    "Sport": "Спорт/активный отдых",
+    "Шоу и перформансы": None,
+}
 
 LANG_PRIORITY = ["ru", "en", "sr"]
 
@@ -239,7 +261,16 @@ class PolakoScraper(BaseScraper):
         cat_text = title
         if description:
             cat_text = f"{title} {description}"
-        event_types = categorize(cat_text, channel='polako', position=0)
+        site_cat = ((ev.get("category") or {}).get("name") or "").strip()
+        mapped = CATEGORY_MAP.get(site_cat)
+        if mapped:
+            event_types, basis = [mapped], 'site'
+        else:
+            # у сайта категории нет, она неоднозначна или новая — словарь по тексту (+AI-проверка)
+            if site_cat and site_cat not in CATEGORY_MAP:
+                logger.warning(f"POLAKO_UNMAPPED_CATEGORY | id={eid} | {site_cat!r} | {title[:60]!r}")
+            event_types = categorize(cat_text, channel='polako', position=0)
+            basis = 'dict' if event_types else 'none'
 
         # картинка: выбранная tr -> верхний уровень -> любая непустая
         # translation (у разных языков картинка может отличаться/отсутствовать)
@@ -274,6 +305,8 @@ class PolakoScraper(BaseScraper):
             city=city,
             country=country,
             event_types=event_types,
+            category_basis=basis,
+            category_hint=site_cat or None,
             images=images,
             dedup_key=build_dedup_key(title, starts_at, city),
         )

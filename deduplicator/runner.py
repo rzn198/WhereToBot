@@ -100,7 +100,7 @@ async def run_dedup(pool: asyncpg.Pool, client: AIClient, cfg: dict, *, method: 
         raise ValueError(f"run_dedup: method должен быть shadow или ai, получено {method!r}")
     s = ai_settings(cfg)
     res = RunResult(stats=dict(dates_total=0, dates_processed=0, requests=0, tokens_in=0, tokens_out=0,
-                               groups_found=0, hidden=0, unhidden=0, bad_days=0, skipped_days=0))
+                               groups_found=0, hidden=0, unhidden=0, sticky=0, bad_days=0, skipped_days=0))
     st = res.stats
     audit = audit_from_cfg(cfg) if not dry_run else audit_from_cfg(None)     # сухой прогон журнал не пишет
     t_start = time.monotonic()
@@ -207,6 +207,7 @@ async def run_dedup(pool: asyncpg.Pool, client: AIClient, cfg: dict, *, method: 
             st['groups_found'] += len(groups)
             st['hidden'] += len(plan.hide)
             st['unhidden'] += len(plan.unhide)
+            st['sticky'] += len(plan.sticky)
             if not dry_run:
                 try:
                     await store.apply_day(pool, plan, run_id=res.run_id, model=model,
@@ -220,6 +221,7 @@ async def run_dedup(pool: asyncpg.Pool, client: AIClient, cfg: dict, *, method: 
                     st['dates_processed'] -= 1
                     st['hidden'] -= len(plan.hide)
                     st['unhidden'] -= len(plan.unhide)
+                    st['sticky'] -= len(plan.sticky)
                     res.plans.pop()
 
     except Exception as e:

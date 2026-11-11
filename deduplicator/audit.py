@@ -180,7 +180,7 @@ class AuditLog(NullAudit):
         self.emit('day', run=run_id, day=day, method=plan.method, asked_ai=asked_ai, model=model,
                   records=len(cands), sources=len(sources), groups=len(plan.groups),
                   lists=len(plan.lists), weak=len(plan.weak), decisions=len(plan.wanted),
-                  unchanged_decisions=plan.kept, hide=len(plan.hide), unhide=len(plan.unhide))
+                  unchanged_decisions=plan.kept, sticky=len(plan.sticky), hide=len(plan.hide), unhide=len(plan.unhide))
 
         if self.raw_answers and getattr(groups, 'raw', None):
             self.emit('ai_raw', run=run_id, day=day, models=list(groups.models),
@@ -219,10 +219,17 @@ class AuditLog(NullAudit):
         for old_w, new_w in plan.merged.items():
             self.emit('merge', run=run_id, day=day, previous_winner=self._rec(recs[old_w], resolver) if old_w in recs else None,
                       winner=self._rec(recs[new_w], resolver) if new_w in recs else None)
+        sticky = {d.loser: d for d in plan.sticky}
+        for lk, d in sticky.items():                      # AI не повторил группу, решение оставлено
+            self.emit('sticky', run=run_id, day=day, reason=d.reason, decision_id=d.id,
+                      winner=self._rec(recs[d.winner], resolver) if d.winner in recs else None,
+                      loser=self._rec(recs[lk], resolver) if lk in recs else None)
         for p in prev or []:
             if p['status'] == 'reverted' or p['decided_by'] == 'admin':
                 continue
             lk, wk = (p['loser_kind'], p['loser_id']), (p['winner_kind'], p['winner_id'])
+            if lk in sticky:
+                continue
             nd = wanted.get(lk)
             if nd is not None and nd.winner.key == wk:
                 continue

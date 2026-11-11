@@ -59,6 +59,10 @@ AGGREGATE_MAP = {
 # Итоговый порядок обхода: сначала уточнения, потом агрегаты.
 CATEGORY_MAP = {**REFINE_MAP, **AGGREGATE_MAP}
 
+# Категории, полученные из точных подразделов и музейного раздела, надёжны. Остальное — грубая категория
+# широкого раздела («Концерты» у билетов может оказаться спектаклем): basis 'aggregate', проверяет AI.
+_RELIABLE_CATEGORIES = set(REFINE_MAP.values()) | {AGGREGATE_MAP["muzeji_izlozba"]}
+
 _TIME_RE = re.compile(r"(\d{1,2}):(\d{2})")
 _ID_RE = re.compile(r"_(\d+)$")
 
@@ -297,6 +301,8 @@ class TicketsRsScraper(BaseScraper):
             venue=venue,
             country="RS",
             event_types=[category],
+            category_basis='site' if category in _RELIABLE_CATEGORIES else 'aggregate',
+            category_hint=f"широкий раздел сайта: {category}",
             images=images,
             dedup_key=build_dedup_key(title, starts_at, None),
         )

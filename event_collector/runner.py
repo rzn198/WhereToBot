@@ -8,6 +8,7 @@ from datetime import date, timedelta
 from event_collector import health
 from shared.run_tracker import track_run
 from event_collector.health import RunResult
+from event_collector.ai_categories import event_category_ai
 from event_collector.saver import save_events
 from event_collector.scrapers.balkan_promo import BalkanPromoScraper
 from event_collector.scrapers.biletrs import BiletRsScraper
@@ -97,6 +98,7 @@ async def _run_one(scraper_cls, pool, known) -> RunResult:
     try:
         scraper = scraper_cls()
         items = await _call_fetch(scraper, known)
+        await event_category_ai.apply(pool, items)
         saved = await save_events(pool, items)
         seconds = time.perf_counter() - t0
         logger.info(

@@ -133,6 +133,7 @@ class BalkanPromoScraper(BaseScraper):
             city=city,
             country="RS",
             event_types=list(FIXED_CATEGORY),
+            category_basis='fixed',
             images=images,
             dedup_key=build_dedup_key(title, starts_at, city),
         )

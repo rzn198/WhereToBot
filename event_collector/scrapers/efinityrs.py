@@ -23,27 +23,34 @@ DETAIL_URL = f"{API_BASE}/CardType?id={{id}}"
 SITE_BASE = "https://efinity.rs"
 TIMEOUT = 15
 
+# NameEN (нижний регистр) категории или подкатегории efinity → группа. Площадки (ZAPPA, SAVA CENTAR, LOŽIONICA,
+# BELGRADE 360 DECK) и NEW YEAR 2027 — не типы событий, их здесь нет намеренно.
 CATEGORIES: dict[str, dict[str, str]] = {
-    "sport":            {"group": "sports",  "type": "match"},
-    "comedy":           {"group": "theater", "type": "comedy"},
-    "musical":          {"group": "theater", "type": "musical"},
-    "immersive":        {"group": "theater", "type": "performance"},
-    "circus":           {"group": "circus",  "type": "performance"},
-    "drama":            {"group": "theater", "type": "drama"},
-    "concerts":         {"group": "music",   "type": "concert"},
-    "museum":           {"group": "museum",  "type": "exhibition"},
-    "palace of science":{"group": "science", "type": "exhibition"},
-    "clubbing":         {"group": "music",   "type": "performance"},
+    "sport":                 {"group": "sports",   "type": "match"},
+    "ice hockey":            {"group": "sports",   "type": "match"},
+    "theatre":               {"group": "theater",  "type": "performance"},
+    "comedy":                {"group": "theater",  "type": "comedy"},
+    "musical":               {"group": "theater",  "type": "musical"},
+    "immersive":             {"group": "theater",  "type": "performance"},
+    "drama":                 {"group": "theater",  "type": "drama"},
+    "monodrama":             {"group": "theater",  "type": "drama"},
+    "theatrical performances": {"group": "theater", "type": "performance"},
+    "circus":                {"group": "circus",   "type": "performance"},
+    "concerts":              {"group": "music",    "type": "concert"},
+    "museum":                {"group": "museum",   "type": "exhibition"},
+    "palace of science":     {"group": "science",  "type": "exhibition"},
+    "clubbing":              {"group": "music",    "type": "performance"},
+    "festivals":             {"group": "festival", "type": "festival"},
 }
-DEFAULT_CATEGORY = {"group": "music", "type": "concert"}
 
 GROUP_TO_CATEGORY = {
-    "music":   "Концерты",
-    "theater": "Кино/Театр",
-    "museum":  "Выставки/Ярмарки",
-    "science": "Выставки/Ярмарки",
-    "sports":  "Спорт/активный отдых",
-    "circus":  "Кино/Театр",
+    "music":    "Концерты",
+    "theater":  "Кино/Театр",
+    "museum":   "Выставки/Ярмарки",
+    "science":  "Выставки/Ярмарки",
+    "sports":   "Спорт/активный отдых",
+    "circus":   "Кино/Театр",
+    "festival": "Фестивали",
 }
 DEFAULT_EVENT_TYPE = "Концерты"
 
@@ -155,7 +162,10 @@ class EfinityRsScraper(BaseScraper):
 
         source_url = f"{SITE_BASE}/event-details/{url_name}_{event_id}"
 
-        cat = self._resolve_category(ev, categories)
+        event_types, basis, hint = self.resolve_event_types(ev, categories)
+        if basis == 'default':
+            logger.warning(f"EFINITYRS_UNMAPPED_CATEGORY | id={event_id} | {ev.get('What') or ev.get('Name')} | "
+                           f"категории сайта: {hint or '—'} → {event_types}")
 
         details = None
         try:
@@ -195,39 +205,34 @@ class EfinityRsScraper(BaseScraper):
             venue=venue,
             city=city,
             country="RS",
-            event_types=[GROUP_TO_CATEGORY.get(cat["group"], DEFAULT_EVENT_TYPE)],
+            event_types=event_types,
             images=images,
             dedup_key=build_dedup_key(title, starts_at, city),
+            category_basis=basis,
+            category_hint=hint,
         )
 
-    def _resolve_category(self, ev: dict, categories: list[dict]) -> dict:
-        cat_ids = ev.get("Categories") or []
-        sub_ids = ev.get("Subcategories") or []
-        category_id = cat_ids[0] if cat_ids else None
-        subcategory_id = sub_ids[0] if sub_ids else None
-
-        if not category_id:
-            return DEFAULT_CATEGORY
-
-        category = next(
-            (c for c in categories if c.get("Id") == category_id), None
-        )
-        if not category:
-            return DEFAULT_CATEGORY
-
-        if subcategory_id:
-            sub = next(
-                (s for s in (category.get("Subcategories") or [])
-                 if s.get("Id") == subcategory_id),
-                None,
-            )
-            if sub:
-                match = CATEGORIES.get((sub.get("NameEN") or "").lower())
-                if match:
-                    return match
-
-        match = CATEGORIES.get((category.get("NameEN") or "").lower())
-        return match or DEFAULT_CATEGORY
+    def resolve_event_types(self, ev: dict, categories: list[dict]) -> tuple[list[str], str, str | None]:
+        """(категории, основание, подсказка). Смотрим ВСЕ категории и подкатегории события: сначала категории,
+        затем подкатегории; каждая известная даёт свою категорию, повторы убираются, первая — главная.
+        Площадки и «NEW YEAR» в таблице не значатся и ничего не определяют. Ни одной известной →
+        «Концерты» с основанием 'default' (в лог идёт EFINITYRS_UNMAPPED_CATEGORY)."""
+        by_id = {c.get("Id"): c for c in categories}
+        sub_by_id = {s.get("Id"): s for c in categories for s in (c.get("Subcategories") or [])}
+        cat_names = [by_id[i].get("NameEN") for i in (ev.get("Categories") or []) if i in by_id]
+        sub_names = [sub_by_id[i].get("NameEN") for i in (ev.get("Subcategories") or []) if i in sub_by_id]
+        names = [n for n in cat_names + sub_names if n]
+        hint = " / ".join(names) or None
+        result: list[str] = []
+        for name in names:
+            match = CATEGORIES.get(name.lower())
+            if match:
+                label = GROUP_TO_CATEGORY.get(match["group"], DEFAULT_EVENT_TYPE)
+                if label not in result:
+                    result.append(label)
+        if result:
+            return result, 'site', hint
+        return [DEFAULT_EVENT_TYPE], 'default', hint
 
     def _extract_description(self, details: dict | None) -> str | None:
         if not details:

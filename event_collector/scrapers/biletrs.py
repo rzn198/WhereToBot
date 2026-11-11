@@ -47,6 +47,7 @@ class BiletRsScraper(BaseScraper):
     def __init__(self, *args, **kwargs):
         self._url_by_id: dict[str, str] = {}
         self._start_by_id: dict[str, datetime] = {}
+        self._listing_cats: dict[str, list[str]] = {}
 
     async def fetch(self, known_urls: set[str] | None = None) -> list[EventItem]:
         logger.info("BILETRS_FETCH | start")
@@ -129,6 +130,10 @@ class BiletRsScraper(BaseScraper):
                 if not idm:
                     continue
                 eid = idm.group(1)
+                # событие может быть в нескольких тегах листинга — запоминаем все
+                cat = TAG_TO_CATEGORY.get(tag)
+                if cat and cat not in self._listing_cats.setdefault(eid, []):
+                    self._listing_cats[eid].append(cat)
                 if eid not in seen:
                     seen.add(eid)
                     ordered.append(eid)
@@ -167,6 +172,10 @@ class BiletRsScraper(BaseScraper):
         currency = d.get("currency") or "RSD"
 
         event_types = self._map_tags(d.get("tags"))
+        # дополняем категориями тегов листинга, под которыми событие найдено (теги страницы бывают неполными)
+        for cat in self._listing_cats.get(eid, []):
+            if cat not in event_types:
+                event_types.append(cat)
 
         images = []
         if d.get("eventImage"):
@@ -187,6 +196,7 @@ class BiletRsScraper(BaseScraper):
             city=city,
             country="RS",
             event_types=event_types,
+            category_basis='site' if event_types else 'none',
             images=images,
             dedup_key=build_dedup_key(title, starts_at, city),
         )
