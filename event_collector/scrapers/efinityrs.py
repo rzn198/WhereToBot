@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import re
 from datetime import datetime, timezone
 
 import httpx
@@ -55,6 +56,9 @@ GROUP_TO_CATEGORY = {
 DEFAULT_EVENT_TYPE = "Концерты"
 
 DEFAULT_CITY = "Belgrade"
+
+
+_FEST_IN_TEXT = re.compile(r'fest', re.IGNORECASE)
 
 
 class EfinityRsScraper(BaseScraper):
@@ -231,6 +235,13 @@ class EfinityRsScraper(BaseScraper):
                 if label not in result:
                     result.append(label)
         if result:
+            # Тег FESTIVALS у efinity стоит общим пакетом «FESTIVALS / CONCERTS / MUSIC / POP & ROCK» на крупных
+            # сольных концертах (Seka Aleksić, Jason Derulo...). Если Фестивали — не единственная категория и в названии
+            # или ссылке нет «fest», считаем тег ненадёжным: оставляем остальные категории, событие отдаём на проверку AI.
+            fest = GROUP_TO_CATEGORY["festival"]
+            if fest in result and len(result) > 1 and not _FEST_IN_TEXT.search(
+                    f"{ev.get('What') or ev.get('Name') or ''} {ev.get('UrlName') or ''}"):
+                return [c for c in result if c != fest], 'aggregate', hint
             return result, 'site', hint
         return [DEFAULT_EVENT_TYPE], 'default', hint
 
