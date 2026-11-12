@@ -47,14 +47,17 @@ event_collector:
   parse_interval_hours: 8
   detail_concurrency: 5
   categories: # AI-категоризация событий сайтов (efinityrs, biletrs, ticketsrs, gigstix, polako, ticrs, balkan-promo)
-    method: source            # source — как отдал скрейпер | shadow — AI считается, пишется EVENT_AI_CAT_DISAGREE, в БД прежнее | ai
+    method: shadow            # source — как отдал скрейпер | shadow — AI считается, пишется EVENT_AI_CAT_DISAGREE, в БД прежнее | ai
     scope: unreliable         # unreliable — только где категорию не дал сам сайт | all — все события
-    models: [ gpt-5.6-luna ]    # цепочка: при отказе — следующая
+    models: [gpt-5.6-luna, deepseek-v4.1-flash]    # цепочка: при отказе — следующая
     timeout: 60
     max_chars: 1200
     concurrency: 3
     max_calls_per_run: 600
-
+  stale: # сверка будущих записей с листингом источника (сейчас только polako)
+    mode: shadow              # off | shadow (только лог EVENT_STALE_SHADOW, events не меняется)
+    max_share: 0.3            # если «устаревших» больше этой доли — сверка пропускается
+    min_listing: 100          # листинг меньше — сверка пропускается
 
 Menu text:
   "Афиша белграда. Все события в одном месте!"

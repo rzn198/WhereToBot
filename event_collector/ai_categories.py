@@ -155,6 +155,7 @@ class EventCategoryAI:
         return self.mode != 'source'
 
     def _candidates(self, items: list[EventItem]) -> list[EventItem]:
+        items = [i for i in items if not i.label_rule]    # метка правила скрейпера (музеи) не переопределяется
         if self.scope == 'all':
             return list(items)
         return [i for i in items if i.category_basis in UNRELIABLE_BASES]

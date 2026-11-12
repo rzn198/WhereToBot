@@ -18,7 +18,8 @@ import httpx
 from loguru import logger
 
 from event_collector.scrapers.base import BaseScraper, EventItem
-from event_collector.normalize import build_dedup_key, clean_html
+from event_collector.normalize import build_dedup_key, clean_html, match_whole, report_rule_hits
+from shared.categories import MUSEUMS
 from event_collector.concurrency import gather_limited
 from event_collector.known import is_known
 from event_collector.retention import too_far
@@ -63,6 +64,22 @@ CATEGORY_MAP = {**REFINE_MAP, **AGGREGATE_MAP}
 # широкого раздела («Концерты» у билетов может оказаться спектаклем): basis 'aggregate', проверяет AI.
 _RELIABLE_CATEGORIES = set(REFINE_MAP.values()) | {AGGREGATE_MAP["muzeji_izlozba"]}
 
+# Метка «Музеи». Постоянная экспозиция музея продаётся как «событие на каждый день»: название записи — ровно название
+# музея. Совпадение только по названию ЦЕЛИКОМ (регистр, диакритика и пунктуация не важны; любая добавка — «тур»,
+# «Ночь музеев», концерт — отдельное событие и метку не получает). Скрытия нет: запись получает event_types = ['Музеи'],
+# а бот скроет её отдельно (отложено). AI-категоризация такие записи не трогает.
+MUSEUM_TITLES: tuple[str, ...] = (
+    "Konak kneginje Ljubice",
+    "Muzej Jovana Cvijića",
+    "Muzej Ive Andrića",
+)
+
+
+def museum_rule(title: str | None) -> str | None:
+    """Название музея из MUSEUM_TITLES, равное названию записи целиком; иначе None."""
+    return match_whole(title, MUSEUM_TITLES)
+
+
 _TIME_RE = re.compile(r"(\d{1,2}):(\d{2})")
 _ID_RE = re.compile(r"_(\d+)$")
 
@@ -96,6 +113,8 @@ class TicketsRsScraper(BaseScraper):
             # на событие). Новые detail делаем только для новых.
             total_listed = len(items)
             self.listed_count = total_listed
+            # правило видит весь листинг (известные записи ниже отбрасываются) — так видно, если музей переименовали
+            report_rule_hits(self.source, 'museum', MUSEUM_TITLES, [it.label_rule for it in items])
             items = [it for it in items
                      if not is_known(known_urls, it.source_url, it.starts_at)]
             logger.info(
@@ -293,6 +312,7 @@ class TicketsRsScraper(BaseScraper):
 
         images = [ev["ImgSrc"]] if ev.get("ImgSrc") else []
 
+        museum = museum_rule(title)
         return EventItem(
             source=self.source,
             source_url=source_url,
@@ -300,11 +320,12 @@ class TicketsRsScraper(BaseScraper):
             starts_at=starts_at,
             venue=venue,
             country="RS",
-            event_types=[category],
-            category_basis='site' if category in _RELIABLE_CATEGORIES else 'aggregate',
-            category_hint=f"широкий раздел сайта: {category}",
+            event_types=[MUSEUMS] if museum else [category],
+            category_basis='fixed' if museum else ('site' if category in _RELIABLE_CATEGORIES else 'aggregate'),
+            category_hint=None if museum else f"широкий раздел сайта: {category}",
             images=images,
             dedup_key=build_dedup_key(title, starts_at, None),
+            label_rule=museum,
         )
 
     def _parse_dt(self, iso_date, datetime_str) -> datetime | None:
