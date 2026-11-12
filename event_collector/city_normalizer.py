@@ -5,15 +5,15 @@ import html
 
 _CITY_ALIASES = {
     "Belgrade": [
-        "belgrade", "beograd", "белград",
+        "belgrade", "beograd", "белград", "u beogradu", "beogradu", "в белграде",
         "beograd (zemun)", "zemun", "земун",
         "novi beograd", "нови београд", "new belgrade",
     ],
     "Novi Sad": [
-        "novi sad", "нови сад", "čenej", "cenej", "ченеј",
+        "novi sad", "нови сад", "novom sadu", "u novom sadu", "в нови-саде", "в нови саде", "čenej", "cenej", "ченеј",
     ],
     "Niš": [
-        "niš", "nis", "ниш",
+        "niš", "nis", "ниш", "u nišu", "u nisu", "у нишу",
     ],
     "Subotica": ["subotica", "суботица"],
     "Kragujevac": ["kragujevac", "крагујевац"],
@@ -40,6 +40,27 @@ _CITY_ALIASES = {
     "Budva": ["budva", "будва"],
     "Podgorica": ["podgorica", "подгорица"],
     "Skopje": ["skopje", "скопје", "скопје - карпош", "skopje - karpoš"],
+    # добавлено 2026-11-12: города, которые встречались в названиях площадок и из-за отсутствия в словаре получали Belgrade
+    "Banja Luka": ["banja luka", "banjaluka", "banjaluci", "бања лука", "баня-лука", "баня лука"],
+    "Šabac": ["šabac", "sabac", "шабац"],
+    "Senta": ["senta", "сента"],
+    "Jagodina": ["jagodina", "јагодина"],
+    "Pirot": ["pirot", "пирот"],
+    "Vranje": ["vranje", "врање"],
+    "Užice": ["užice", "uzice", "ужице"],
+    "Aranđelovac": ["aranđelovac", "arandjelovac", "аранђеловац"],
+    "Kikinda": ["kikinda", "кикинда"],
+    "Temerin": ["temerin", "темерин"],
+    "Futog": ["futog", "футог"],
+    "Bačka Palanka": ["bačka palanka", "backa palanka", "бачка паланка"],
+    "Beočin": ["beočin", "beocin", "беочин"],
+    "Inđija": ["inđija", "indjija", "инђија"],
+    "Mionica": ["mionica", "мионица"],
+    "Vrbas": ["vrbas", "врбас"],
+    "Paraćin": ["paraćin", "paracin", "параћин"],
+    "Aleksinac": ["aleksinac", "алексинац"],
+    "Petrovaradin": ["petrovaradin", "петроварадин"],
+    "Istanbul": ["istanbul", "istanbul", "стамбул", "истанбул"],
 }
 
 _ALIAS_TO_CANON: dict[str, str] = {}
@@ -77,6 +98,7 @@ def find_city_in_text(text: str | None, default: str = "Belgrade") -> str:
     low = _clean_raw(text).lower()
     if not low:
         return default
+    low = re.sub(r"[-–—]", " ", low)     # «Нови-Сад», «Novi-Sad» -> «нови сад»
     best_canon = None
     best_len = 0
     for alias, canon in _ALIAS_TO_CANON.items():

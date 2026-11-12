@@ -16,6 +16,7 @@
 from __future__ import annotations
 
 import asyncio
+from collections import Counter
 import json
 import re
 from datetime import datetime, timezone
@@ -29,7 +30,7 @@ from event_collector.normalize import (
     clean_html, parse_datetime, build_dedup_key, match_phrase, match_whole, report_rule_hits,
 )
 from shared.categories import MUSEUMS
-from event_collector.city_normalizer import find_city_in_text
+from event_collector.city_normalizer import find_city_in_text, normalize_city
 from collector.categorizer_v2 import categorize
 
 BELGRADE_TZ = ZoneInfo('Europe/Belgrade')
@@ -68,6 +69,23 @@ def museum_rule(title: str | None) -> str | None:
 
 
 API_BASE = "https://polako-prod-5qyaj.ondigitalocean.app/data/events"
+
+
+def resolve_city(loc: dict, title: str = "") -> tuple[str, str]:
+    """(город, откуда). Порядок: city.name самой площадки на сайте -> город в адресе -> в названии площадки ->
+    в названии события -> Belgrade по умолчанию (источник 'default', в логе считается отдельно).
+    Раньше город искали только в названии площадки и при неудаче ставили Belgrade: события Нови-Сада, Ниша, Крагуеваца
+    без города в названии площадки попадали в ленту Белграда."""
+    city = loc.get("city")
+    name = city.get("name") if isinstance(city, dict) else None
+    canon = normalize_city(name)
+    if canon:
+        return canon, "site"
+    for text, src in ((loc.get("address_text"), "address"), (loc.get("name"), "venue"), (title, "title")):
+        found = find_city_in_text(text, default="")
+        if found:
+            return found, src
+    return "Belgrade", "default"
 ASSETS_BASE = "https://polako-prod-5qyaj.ondigitalocean.app/assets"
 SITE_BASE = "https://polakohedonist.club/ru/events"
 TIMEOUT = 20
@@ -81,7 +99,8 @@ API_FIELDS = ",".join([
     "id", "name", "start_date", "status", "base_currency", "duration",
     "visit_price", "price_type", "for_adults",
     "image_cover.id", "image_cover.filename_disk",
-    "location.name", "location.address_link",
+    "location.name", "location.address_link", "location.address_text",
+    "location.city.name",
     "translations.event_name", "translations.event_description",
     "translations.language",
     "translations.image_cover.id", "translations.image_cover.filename_disk",
@@ -198,6 +217,7 @@ class PolakoScraper(BaseScraper):
         # сверка с БД (event_collector/stale.py): все ссылки листинга и признак его полноты
         self.listing_urls: set[str] | None = None
         self.listing_complete = False
+        self._city_stats = Counter()          # откуда взят город: site / address / venue / title / default
         api_filter = self._build_filter()
 
         async with httpx.AsyncClient(timeout=TIMEOUT) as client:
@@ -280,7 +300,8 @@ class PolakoScraper(BaseScraper):
         logger.info(
             f"POLAKO_DONE | total_events={len(items)} | "
             f"auto_hide={sum(1 for i in items if i.auto_hide_reason)} | "
-            f"museum_label={sum(1 for i in items if i.label_rule)}"
+            f"museum_label={sum(1 for i in items if i.label_rule)} | "
+            f"city_src={dict(self._city_stats)}"
         )
         report_rule_hits(self.source, 'museum', MUSEUM_TITLES, [i.label_rule for i in items])
         return items
@@ -319,7 +340,10 @@ class PolakoScraper(BaseScraper):
         # прежняя проверка отбрасывала всё. Город ищем в venue/location.name,
         # дефолт Belgrade; страна RS.
         country = "RS"
-        city = find_city_in_text(venue, default="Belgrade")
+        city, city_src = resolve_city(loc, title)
+        stats = getattr(self, "_city_stats", None)
+        if stats is not None:
+            stats[city_src] += 1
 
         # категоризация как в messages: title + description, мульти-лейбл
         cat_text = title
