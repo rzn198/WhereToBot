@@ -55,7 +55,7 @@ event_collector:
     concurrency: 3
     max_calls_per_run: 600
   stale: # сверка будущих записей с листингом источника (сейчас только polako)
-    mode: shadow              # off | shadow (только лог EVENT_STALE_SHADOW, events не меняется)
+    mode: hide              # off | shadow (только лог EVENT_STALE_SHADOW, events не меняется)
     max_share: 0.3            # если «устаревших» больше этой доли — сверка пропускается
     min_listing: 100          # листинг меньше — сверка пропускается
 

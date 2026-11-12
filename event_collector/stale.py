@@ -7,7 +7,9 @@
 Режимы (config.yaml: event_collector.stale.mode или env EVENT_STALE_MODE):
   off    — ничего не делать
   shadow — считать и писать EVENT_STALE_SHADOW / stale_audit.jsonl (по умолчанию)
-Скрытие (mode=hide) — отдельный шаг, по решению после просмотра логов.
+  hide   — то же, и записи, которых нет в полном листинге, получают hidden_by_admin = TRUE
+           (EVENT_STALE_HIDDEN). Удаления нет, возврата из архива нет: запись остаётся скрытой.
+Защиты те же для всех режимов: при их срабатывании ничего не скрывается (EVENT_STALE_SKIP).
 """
 from __future__ import annotations
 
@@ -67,7 +69,7 @@ async def run_shadow(pool, source: str, scraper, cfg: dict | None = None,
                      audit_path: Path | None = None, today: date | None = None) -> StaleDecision | None:
     """Сравнить БД с листингом и записать лог. Никогда не меняет events."""
     cfg = cfg or _cfg()
-    if cfg['mode'] == 'off':
+    if cfg['mode'] not in ('shadow', 'hide'):      # off и любое неизвестное значение — ничего не делаем
         return None
     today = today or date.today()
     rows = await pool.fetch(
@@ -96,12 +98,22 @@ async def run_shadow(pool, source: str, scraper, cfg: dict | None = None,
         grp = by_day[day]
         logger.info(f"EVENT_STALE_GROUP | source={source} | date={day} | n={len(grp)} | e.g. {grp[0]['title'][:60]!r}")
 
+    hidden_now = 0
+    if cfg['mode'] == 'hide' and stale:
+        res = await pool.execute(
+            "UPDATE events SET hidden_by_admin = TRUE "
+            "WHERE source = $1 AND id = ANY($2::int[]) AND hidden_by_admin = FALSE",
+            source, [r['id'] for r in stale])
+        hidden_now = int(res.split()[-1])
+        logger.info(f"EVENT_STALE_HIDDEN | source={source} | hidden={hidden_now} | stale={len(stale)}")
+
     try:
         path = audit_path or _audit_path()
         path.parent.mkdir(parents=True, exist_ok=True)
         rec = {
             'ts': datetime.now(timezone.utc).isoformat(), 'source': source,
-            'db_future': len(rows), 'listing': len(scraper.listing_urls), 'stale': len(stale),
+            'mode': cfg['mode'], 'db_future': len(rows), 'listing': len(scraper.listing_urls),
+            'stale': len(stale), 'hidden': hidden_now,
             'items': [{'id': r['id'], 'date': str(r['starts_at']), 'title': r['title'],
                        'hidden': bool(r['hidden_by_admin'])} for r in stale],
         }
