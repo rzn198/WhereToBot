@@ -116,6 +116,7 @@ class Counters:
     failed: int = 0
     disagree: int = 0
     changed: int = 0
+    skipped_hidden: int = 0   # уже скрытые в БД записи: AI не вызывался, категории как отдал скрейпер
     answered: set = field(default_factory=set)  # source_url событий, по которым есть ответ AI (или кэш)
     diffs: list = field(default_factory=list)   # (title, url, было, AI) — для разбора в refresh_source
 
@@ -158,6 +159,7 @@ class EventCategoryAI:
 
     def _candidates(self, items: list[EventItem]) -> list[EventItem]:
         items = [i for i in items if not i.label_rule]    # метка правила скрейпера (музеи) не переопределяется
+        items = [i for i in items if not i.auto_hide_reason]   # скрываемое правилом (AA) AI не нужно
         if self.scope == 'all':
             return list(items)
         return [i for i in items if i.category_basis in UNRELIABLE_BASES]
@@ -174,8 +176,26 @@ class EventCategoryAI:
             logger.error(f"EVENT_AI_ERROR | {type(e).__name__}: {e} — категории скрейпера")
             return c
 
+    async def _hidden_urls(self, pool, items: list[EventItem]) -> set[str]:
+        """source_url записей, которые в БД уже скрыты админом/дедупом/сверкой: AI их не пересчитывает.
+        Сбой БД не должен блокировать категоризацию — тогда считаем, что скрытых нет."""
+        if pool is None or not items:
+            return set()
+        try:
+            rows = await pool.fetch(
+                "SELECT source_url FROM events WHERE source = $1 AND hidden_by_admin = TRUE "
+                "AND source_url = ANY($2::text[])", items[0].source, [i.source_url for i in items])
+            return {r['source_url'] for r in rows}
+        except Exception as e:
+            logger.warning(f"EVENT_AI_HIDDEN_LOOKUP_FAILED | {type(e).__name__}: {e}")
+            return set()
+
     async def _apply(self, pool, items: list[EventItem], c: Counters) -> Counters:
         cands = self._candidates(items)
+        hidden = await self._hidden_urls(pool, cands)
+        if hidden:
+            cands = [i for i in cands if i.source_url not in hidden]
+            c.skipped_hidden = len(hidden)
         c.candidates = len(cands)
         if not cands:
             return c
