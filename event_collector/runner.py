@@ -100,6 +100,12 @@ async def _run_one(scraper_cls, pool, known) -> RunResult:
         items = await _call_fetch(scraper, known)
         await event_category_ai.apply(pool, items)
         saved = await save_events(pool, items)
+        if hasattr(scraper, 'listing_urls'):
+            try:
+                from event_collector import stale
+                await stale.run_shadow(pool, name, scraper)
+            except Exception as e:   # сверка не должна ломать прогон
+                logger.warning(f"EVENT_STALE_ERROR | source={name} | {e}")
         seconds = time.perf_counter() - t0
         logger.info(
             f"EVENT_SCRAPER_DONE | source={name} | items={len(items)} | "

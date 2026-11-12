@@ -29,10 +29,12 @@ _UPSERT_SQL = f"""
 INSERT INTO {EVENTS_TABLE} (
     source, source_url, title, description,
     starts_at, venue, city, country,
-    images, dedup_key, event_types
+    images, dedup_key, event_types, hidden_by_admin
 ) VALUES (
-    $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11
+    $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12
 )
+-- hidden_by_admin ниже намеренно НЕ входит в DO UPDATE: правило автоскрытия действует только при вставке,
+-- ручное решение админа и решения дедупликатора при повторном сохранении не затираются.
 ON CONFLICT (source_url) DO UPDATE SET
     title          = EXCLUDED.title,
     description    = {_NEW_DESC.format(t=EVENTS_TABLE)},
@@ -72,7 +74,7 @@ async def save_events(pool, items: list[EventItem]) -> int:
         return 0
 
     source = items[0].source
-    inserted = updated = unchanged = 0
+    inserted = updated = unchanged = autohidden = 0
 
     past_days, future_days = get_window()
     kept = []
@@ -108,11 +110,18 @@ async def save_events(pool, items: list[EventItem]) -> int:
                     _first_image(it.images),
                     it.dedup_key,
                     normalize_categories(it.event_types),
+                    bool(it.auto_hide_reason),
                 )
                 if row is None:
                     unchanged += 1
                 elif row['inserted']:
                     inserted += 1
+                    if it.auto_hide_reason:
+                        autohidden += 1
+                        logger.info(
+                            f"EVENT_AUTOHIDDEN | source={it.source} | rule={it.auto_hide_reason!r} | "
+                            f"title={it.title[:80]!r} | url={it.source_url}"
+                        )
                 else:
                     updated += 1
             except Exception as e:
@@ -124,6 +133,6 @@ async def save_events(pool, items: list[EventItem]) -> int:
     saved = inserted + updated
     logger.info(
         f"EVENT_SAVED | source={source} | saved={saved} | "
-        f"inserted={inserted} | updated={updated} | unchanged={unchanged}"
+        f"inserted={inserted} | updated={updated} | unchanged={unchanged} | autohidden={autohidden}"
     )
     return saved

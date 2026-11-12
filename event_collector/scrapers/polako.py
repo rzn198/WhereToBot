@@ -25,11 +25,47 @@ import httpx
 from loguru import logger
 
 from event_collector.scrapers.base import BaseScraper, EventItem
-from event_collector.normalize import clean_html, parse_datetime, build_dedup_key
+from event_collector.normalize import (
+    clean_html, parse_datetime, build_dedup_key, match_phrase, match_whole, report_rule_hits,
+)
+from shared.categories import MUSEUMS
 from event_collector.city_normalizer import find_city_in_text
 from collector.categorizer_v2 import categorize
 
 BELGRADE_TZ = ZoneInfo('Europe/Belgrade')
+
+# ── Правила по названию ────────────────────────────────────────────────────────────────────────────────────────
+# 1) Автоскрытие. Регулярные встречи сообществ взаимопомощи («Анонимные Алкоголики») — не афиша, в ленту не попадают.
+#    Решение Denis 2026-11-11: правило живёт здесь, ТОЧНОЕ совпадение по готовым фразам, без масок:
+#      - сравниваются целые слова, фраза должна встретиться в названии подряд, слово в слово;
+#      - регистр, ё/е, диакритика (č ć š ž đ) и знаки препинания не важны;
+#      - описание не читается; «Анонимность и алкоголь», «Безалкогольный…», «Алкоголики анонимные» НЕ совпадают;
+#      - другие формы (родительный падеж и т.п.) в список не входят — добавлять сюда вручную, отдельной строкой.
+#    Скрывается только при первой вставке (EventItem.auto_hide_reason → events.hidden_by_admin); ручное решение админа
+#    при повторном сохранении не затирается.
+AUTO_HIDE_TITLE_PHRASES: tuple[str, ...] = (
+    "анонимные алкоголики",
+    "anonimni alkoholičari",
+    "alcoholics anonymous",
+)
+
+# 2) Метка «Музеи». Постоянная экспозиция музея продаётся как «событие на каждый день»: название записи — ровно название
+#    музея. Совпадение только по названию ЦЕЛИКОМ (любая добавка — «тур», «Ночь музеев», концерт — отдельное событие и метку
+#    не получает). Скрытия нет: записи получают event_types = ['Музеи'], а бот скроет их отдельно (отложено).
+MUSEUM_TITLES: tuple[str, ...] = (
+    "Музей Паранормального",
+)
+
+
+def auto_hide_reason(title: str | None) -> str | None:
+    """Фраза из AUTO_HIDE_TITLE_PHRASES, которая целиком (подряд, слово в слово) входит в название; иначе None."""
+    return match_phrase(title, AUTO_HIDE_TITLE_PHRASES)
+
+
+def museum_rule(title: str | None) -> str | None:
+    """Название музея из MUSEUM_TITLES, равное названию записи целиком; иначе None."""
+    return match_whole(title, MUSEUM_TITLES)
+
 
 API_BASE = "https://polako-prod-5qyaj.ondigitalocean.app/data/events"
 ASSETS_BASE = "https://polako-prod-5qyaj.ondigitalocean.app/assets"
@@ -159,6 +195,9 @@ class PolakoScraper(BaseScraper):
         logger.info("POLAKO_FETCH | start")
         # размер листинга для мониторинга (None = листинг не получен)
         self.listed_count = None
+        # сверка с БД (event_collector/stale.py): все ссылки листинга и признак его полноты
+        self.listing_urls: set[str] | None = None
+        self.listing_complete = False
         api_filter = self._build_filter()
 
         async with httpx.AsyncClient(timeout=TIMEOUT) as client:
@@ -181,6 +220,7 @@ class PolakoScraper(BaseScraper):
 
             # Шаг 2: пагинация
             items: list[EventItem] = []
+            listing_urls: set[str] = set()
             offset = 0
             page = 0
             while offset < total:
@@ -208,6 +248,8 @@ class PolakoScraper(BaseScraper):
                     break
 
                 for ev in events:
+                    if ev.get("id"):
+                        listing_urls.add(f"{SITE_BASE}/{ev['id']}")   # в листинге, даже если _build_item откажется (нет даты и т.п.)
                     item = self._build_item(ev)
                     if item:
                         items.append(item)
@@ -218,7 +260,29 @@ class PolakoScraper(BaseScraper):
                 if offset < total:
                     await asyncio.sleep(PAGE_DELAY)
 
-        logger.info(f"POLAKO_DONE | total_events={len(items)}")
+            # Листинг считается полным, только если: все страницы получены, число уникальных ссылок равно total,
+            # и повторный подсчёт в конце даёт то же total (иначе источник менялся во время пагинации, страницы могли сдвинуться).
+            recount = None
+            if offset >= total and len(listing_urls) == total:
+                try:
+                    r = await client.get(API_BASE, params={"aggregate[count]": "id", "filter": api_filter})
+                    r.raise_for_status()
+                    recount = int(r.json()["data"][0]["count"]["id"])
+                except Exception as e:
+                    logger.warning(f"POLAKO_RECOUNT_ERROR | {e}")
+            self.listing_urls = listing_urls
+            self.listing_complete = recount == total
+            logger.info(
+                f"POLAKO_LISTING | complete={self.listing_complete} | urls={len(listing_urls)} | "
+                f"total={total} | fetched={offset} | recount={recount}"
+            )
+
+        logger.info(
+            f"POLAKO_DONE | total_events={len(items)} | "
+            f"auto_hide={sum(1 for i in items if i.auto_hide_reason)} | "
+            f"museum_label={sum(1 for i in items if i.label_rule)}"
+        )
+        report_rule_hits(self.source, 'museum', MUSEUM_TITLES, [i.label_rule for i in items])
         return items
 
     def _build_item(self, ev: dict) -> EventItem | None:
@@ -295,6 +359,9 @@ class PolakoScraper(BaseScraper):
             "url": ev.get("book_link") or source_url,
         }]
 
+        museum = museum_rule(title)
+        if museum:
+            event_types, basis = [MUSEUMS], 'fixed'
         return EventItem(
             source=self.source,
             source_url=source_url,
@@ -309,6 +376,8 @@ class PolakoScraper(BaseScraper):
             category_hint=site_cat or None,
             images=images,
             dedup_key=build_dedup_key(title, starts_at, city),
+            auto_hide_reason=auto_hide_reason(title),
+            label_rule=museum,
         )
 
     def _pick_translation(self, translations) -> dict | None:
