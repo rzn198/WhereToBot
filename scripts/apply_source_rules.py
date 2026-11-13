@@ -98,7 +98,7 @@ async def run(apply: bool, candidates: bool) -> int:
             await pool.execute("UPDATE events SET hidden_by_admin = TRUE WHERE id = ANY($1::bigint[]) AND hidden_by_admin = FALSE",
                                hide_todo)
         if label_todo:
-            await pool.execute("UPDATE events SET event_types = ARRAY[$2]::text[] WHERE id = ANY($1::bigint[])",
+            await pool.execute("UPDATE events SET event_types = ARRAY[$2]::text[] WHERE id = ANY($1::bigint[]) AND NOT category_manual",
                                label_todo, MUSEUMS)
         print(f"Скрыто: {len(hide_todo)}; помечено «{MUSEUMS}»: {len(label_todo)}")
         return 0

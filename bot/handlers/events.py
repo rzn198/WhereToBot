@@ -217,10 +217,11 @@ async def show_current_event(
     current_filter = str(context.user_data.get('current_filter', ''))
     category_code = current_filter[4:].split(':', 1)[0] if current_filter.startswith('cat:') else None
     is_admin = user_id == config['telegram']['admin_user_id']
-    under_review = False
+    under_review = reviewed = False
     if is_admin:
-        from bot.handlers.reviews import is_under_review
-        under_review = await is_under_review(pool, ref)
+        from bot.handlers.reviews import review_state
+        state = await review_state(pool, ref)
+        under_review, reviewed = state == 'open', state == 'applied'
 
     if event['kind'] == 'e':
         card = build_event_card(event, expanded=expanded, preview_chars=preview_chars)
@@ -234,6 +235,7 @@ async def show_current_event(
             event_date=event.get('starts_at'),
             is_admin=is_admin,
             under_review=under_review,
+            reviewed=reviewed,
         )
         await edit_or_send(
             context=context,
@@ -296,6 +298,7 @@ async def show_current_event(
         event_date=event.get('date'),
         is_admin=is_admin,
         under_review=under_review,
+        reviewed=reviewed,
     )
 
     await edit_or_send(

@@ -41,6 +41,9 @@ def get_main_menu_inline(is_admin: bool = False, counts: dict | None = None) -> 
             InlineKeyboardButton('🔍 Дубли',              callback_data='admin:duplicates'),
         ])
         buttons.append([
+            InlineKeyboardButton('🧩 Неразобранные',      callback_data='un:menu'),
+        ])
+        buttons.append([
             InlineKeyboardButton('⚙️ Админка',            callback_data='admin_panel:main'),
         ])
 

@@ -21,7 +21,7 @@ os.environ.setdefault('APP_ENV', 'production')
 
 from db.connection import close_db_pool, init_db_pool  # noqa: E402
 
-COLUMNS = ['id', 'created_at', 'status', 'kind', 'reason_code', 'reason_text', 'correct_category', 'correct_date',
+COLUMNS = ['id', 'created_at', 'flow', 'status', 'kind', 'reason_code', 'reason_text', 'correct_category', 'correct_date',
            'title', 'starts_at', 'venue', 'source', 'source_url', 'event_types', 'description',
            'event_id', 'message_id', 'resolved_at', 'resolution_note']
 
@@ -60,7 +60,7 @@ async def run(args) -> int:
 
 def main(argv=None) -> int:
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument('--status', choices=['open', 'resolved', 'all'], default='open')
+    p.add_argument('--status', choices=['open', 'resolved', 'applied', 'all'], default='open')
     p.add_argument('--format', choices=['csv', 'jsonl'], default='csv')
     p.add_argument('--out')
     return asyncio.run(run(p.parse_args(argv)))

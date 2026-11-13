@@ -1,17 +1,17 @@
 """Пересмотр событий (только админ): кнопка на карточке → причина → запись в event_reviews.
 
 Поток: «🔎 Пересмотр» → окно с текстом события и кнопками «Неправильная дата» / «Неправильная категория» /
-«Ввести вручную» / «Назад». Дата и ручной текст вводятся сообщением; категория выбирается кнопкой (есть «Другое» —
-только здесь). Сохраняется снимок записи, причина и исправление; в events / messages ничего не меняется.
-Пока пересмотр открыт (status = 'open'), кнопка на карточке неактивна и называется «На пересмотре». Закрывается в БД.
+«Ввести вручную» / «Назад». Дата и ручной текст вводятся сообщением — только запись в event_reviews.
+Категория выбирается кнопкой: реальная категория заменяет event_types целиком (events — с category_manual) и
+пишется в event_reviews со статусом 'applied' («Пересмотрено»); «Другое» — только запись (status 'open').
+Пока пересмотр открыт — кнопка на карточке «На пересмотре», после применения категории — «Пересмотрено»; обе неактивны.
 Callback_data: rv:open:<ref> rv:date:<ref> rv:cat:<ref> rv:man:<ref> rv:setcat:<ref>:<code> rv:busy
 """
 
 from __future__ import annotations
 
-import json
 import re
-from datetime import date, datetime
+from datetime import date
 
 from loguru import logger
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
@@ -20,7 +20,9 @@ from telegram.ext import ContextTypes
 from bot.formatters.event import build_entities
 from bot.formatters.event_card import build_event_card
 from bot.utils.categories import CATEGORIES
+from bot.utils import moderation
 from bot.utils.messenger import edit_or_send
+from bot.utils.moderation import build_review_values  # noqa: F401  (обратная совместимость)
 from bot.utils.refs import is_event_ref, parse_ref, ref_id
 from collector.entities.truncator import EventText, truncate_if_needed
 from db.tables import Tables
@@ -101,78 +103,49 @@ def _where(ref) -> tuple[str, str]:
     return ('event_id', 'event') if is_event_ref(ref) else ('message_id', 'post')
 
 
-async def is_under_review(pool, ref) -> bool:
-    """Есть ли открытый пересмотр. Сбой БД не должен ломать карточку — тогда считаем, что нет."""
+async def review_state(pool, ref) -> str | None:
+    """'open' — на пересмотре, 'applied' — пересмотрено, None — нет. Сбой БД не ломает карточку."""
     column, _ = _where(ref)
     try:
-        return bool(await pool.fetchval(
-            f"SELECT 1 FROM {Tables.EVENT_REVIEWS} WHERE {column} = $1 AND status = 'open' LIMIT 1", ref_id(ref)))
+        states = await pool.fetch(
+            f"SELECT DISTINCT status FROM {Tables.EVENT_REVIEWS} "
+            f"WHERE flow = 'review' AND {column} = $1 AND status IN ('open', 'applied')", ref_id(ref))
     except Exception as e:
         logger.warning(f"REVIEW_STATE_FAILED | ref={ref} | {type(e).__name__}: {e}")
-        return False
+        return None
+    found = {r['status'] for r in states}
+    if 'open' in found:
+        return 'open'
+    return 'applied' if 'applied' in found else None
+
+
+async def is_under_review(pool, ref) -> bool:
+    return await review_state(pool, ref) == 'open'
 
 
 async def _load_record(pool, ref) -> dict | None:
-    if is_event_ref(ref):
-        row = await pool.fetchrow(f"SELECT * FROM {Tables.EVENTS} WHERE id = $1", ref_id(ref))
-    else:
-        row = await pool.fetchrow(
-            f"SELECT m.*, c.username AS channel_username, c.title AS channel_title "
-            f"FROM {Tables.MESSAGES} m LEFT JOIN {Tables.CHANNELS} c ON c.channel_id = m.channel_id "
-            f"WHERE m.surrogate_id = $1", ref_id(ref))
-    return dict(row) if row else None
-
-
-def build_review_values(ref, rec: dict) -> dict:
-    """Поля записи пересмотра из строки events / messages."""
-    if is_event_ref(ref):
-        return {
-            'kind': 'event', 'event_id': ref_id(ref), 'message_id': None,
-            'title': rec.get('title'), 'description': rec.get('description'),
-            'starts_at': rec.get('starts_at'), 'venue': rec.get('venue'),
-            'source': rec.get('source'), 'source_url': rec.get('source_url'),
-            'event_types': list(rec.get('event_types') or []),
-        }
-    text = rec.get('text') or ''
-    username = rec.get('channel_username')
-    first_line = next((ln.strip() for ln in text.splitlines() if ln.strip()), '')
-    return {
-        'kind': 'post', 'event_id': None, 'message_id': ref_id(ref),
-        'title': first_line[:120], 'description': text,
-        'starts_at': rec.get('date'), 'venue': None,
-        'source': (f'@{username}' if username else rec.get('channel_title') or str(rec.get('channel_id'))),
-        'source_url': f'https://t.me/{username}/{rec.get("id")}' if username and rec.get('id') else None,
-        'event_types': list(rec.get('event_types') or []),
-    }
-
-
-def _json_default(value):
-    if isinstance(value, (date, datetime)):
-        return value.isoformat()
-    return str(value)
+    return await moderation.load_record(pool, ref)
 
 
 async def save_review(pool, ref, reason_code: str, reason_text: str | None = None,
                       correct_category: str | None = None, correct_date: date | None = None) -> str:
-    """Записывает пересмотр. 'created' — записан; 'exists' — уже открыт; 'missing' — записи нет."""
-    rec = await _load_record(pool, ref)
+    """Записывает пересмотр. 'created' — записан; 'exists' — уже открыт; 'missing' — записи нет.
+
+    Реальная категория (кроме «Другое») дополнительно записывается в events / messages, статус 'applied'.
+    Дата и ручной ввод — только запись в event_reviews.
+    """
+    applied = reason_code == REASON_CATEGORY and correct_category not in (None, OTHER_LABEL)
+    if applied:
+        result = await moderation.decide(
+            pool, ref, flow=moderation.FLOW_REVIEW, reason_code=REASON_CATEGORY,
+            status=moderation.STATUS_APPLIED, correct_category=correct_category)
+        return 'created' if result == 'done' else 'missing'
+    rec = await moderation.load_record(pool, ref)
     if rec is None:
         return 'missing'
-    v = build_review_values(ref, rec)
-    snapshot = json.dumps(rec, default=_json_default, ensure_ascii=False)
-    new_id = await pool.fetchval(
-        f"""
-        INSERT INTO {Tables.EVENT_REVIEWS}
-            (kind, event_id, message_id, reason_code, reason_text, correct_category, correct_date,
-             title, description, starts_at, venue, source, source_url, event_types, snapshot)
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15::jsonb)
-        ON CONFLICT DO NOTHING
-        RETURNING id
-        """,
-        v['kind'], v['event_id'], v['message_id'], reason_code, reason_text, correct_category, correct_date,
-        v['title'], v['description'], v['starts_at'], v['venue'], v['source'], v['source_url'],
-        v['event_types'], snapshot,
-    )
+    new_id = await moderation.insert_decision(
+        pool, ref, rec, flow=moderation.FLOW_REVIEW, reason_code=reason_code, status=moderation.STATUS_OPEN,
+        reason_text=reason_text, correct_category=correct_category, correct_date=correct_date)
     if new_id is None:
         return 'exists'
     logger.info(f"REVIEW_SAVED | id={new_id} | ref={ref} | reason={reason_code} | "
@@ -181,6 +154,16 @@ async def save_review(pool, ref, reason_code: str, reason_text: str | None = Non
 
 
 # ---------- окна ----------
+
+def render_full_view(event: dict) -> tuple[str, list]:
+    """Полный текст события / поста (как на карточке) и entities — для окон админа."""
+    if event['kind'] == 'e':
+        card = build_event_card(event, expanded=True)
+        return card.text, card.entities
+    truncated = truncate_if_needed(
+        EventText(text=event['text'], entities=event['entities'] or []), limit=POST_VIEW_LIMIT)
+    return truncated.text, build_entities(truncated.text, truncated.entities)
+
 
 async def _show_review_window(update: Update, context: ContextTypes.DEFAULT_TYPE, ref) -> None:
     """Текст события (как на карточке, целиком) и кнопки причин."""
@@ -192,13 +175,7 @@ async def _show_review_window(update: Update, context: ContextTypes.DEFAULT_TYPE
         await update.callback_query.answer('Запись не найдена', show_alert=True)
         return
 
-    if event['kind'] == 'e':
-        card = build_event_card(event, expanded=True)
-        text, entities = card.text, card.entities
-    else:
-        truncated = truncate_if_needed(
-            EventText(text=event['text'], entities=event['entities'] or []), limit=POST_VIEW_LIMIT)
-        text, entities = truncated.text, build_entities(truncated.text, truncated.entities)
+    text, entities = render_full_view(event)
 
     await edit_or_send(
         context=context, chat_id=update.effective_chat.id, text=text,
@@ -235,7 +212,7 @@ async def handle_review(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         await query.answer()
         return
     if action == 'busy':
-        await query.answer('Это событие уже на пересмотре', show_alert=False)
+        await query.answer('Это событие уже на пересмотре или пересмотрено', show_alert=False)
         return
 
     if action == 'back':
@@ -250,13 +227,13 @@ async def handle_review(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         return
 
     pool = context.bot_data.get('pool')
-    if action != 'setcat' and await is_under_review(pool, ref) and action != 'open':
-        await query.answer('Это событие уже на пересмотре', show_alert=True)
+    if action != 'open' and await review_state(pool, ref):
+        await query.answer('Это событие уже на пересмотре или пересмотрено', show_alert=True)
         return
 
     if action == 'open':
-        if await is_under_review(pool, ref):
-            await query.answer('Это событие уже на пересмотре', show_alert=True)
+        if await review_state(pool, ref):
+            await query.answer('Это событие уже на пересмотре или пересмотрено', show_alert=True)
             await _back_to_card(update, context)
             return
         await query.answer()

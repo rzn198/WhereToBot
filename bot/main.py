@@ -84,6 +84,7 @@ from bot.handlers.calendar import (
 )
 
 from bot.handlers.reviews import handle_review, handle_review_text
+from bot.handlers.unnamed import handle_unnamed, handle_unnamed_text
 from bot.handlers.categories import (
     handle_categories_menu,
     handle_category,
@@ -148,6 +149,9 @@ async def _route_text_message(
     if user_id == admin_id and await handle_review_text(update, context):
         return
 
+    if user_id == admin_id and await handle_unnamed_text(update, context):
+        return
+
     if user_id == admin_id:
         handled = await handle_admin_text_input(update, context)
         if handled:
@@ -206,6 +210,7 @@ async def main():
     app.add_handler(CallbackQueryHandler(handle_category_calendar_nav, pattern='^catcal_nav:'))
     app.add_handler(CallbackQueryHandler(handle_category_pick, pattern='^catpick:'))
     app.add_handler(CallbackQueryHandler(handle_review, pattern='^rv:'))
+    app.add_handler(CallbackQueryHandler(handle_unnamed, pattern='^un:'))
 
     app.add_handler(CallbackQueryHandler(handle_navigation, pattern='^nav:'))
 
