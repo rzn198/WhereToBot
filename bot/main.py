@@ -83,9 +83,14 @@ from bot.handlers.calendar import (
     handle_calendar_nav,
 )
 
+from bot.handlers.reviews import handle_review, handle_review_text
 from bot.handlers.categories import (
     handle_categories_menu,
     handle_category,
+    handle_category_calendar,
+    handle_category_calendar_nav,
+    handle_category_day,
+    handle_category_pick,
 )
 
 from bot.handlers.cinema import (
@@ -140,6 +145,9 @@ async def _route_text_message(
         await handle_admin_reply_message(update, context)
         return
 
+    if user_id == admin_id and await handle_review_text(update, context):
+        return
+
     if user_id == admin_id:
         handled = await handle_admin_text_input(update, context)
         if handled:
@@ -192,7 +200,12 @@ async def main():
     app.add_handler(CallbackQueryHandler(handle_filter, pattern='^filter:'))
 
     app.add_handler(CallbackQueryHandler(handle_categories_menu, pattern='^cats:menu$'))
-    app.add_handler(CallbackQueryHandler(handle_category, pattern='^cat:'))
+    app.add_handler(CallbackQueryHandler(handle_category, pattern='^cat:[a-z_]+$'))
+    app.add_handler(CallbackQueryHandler(handle_category_day, pattern='^catd:'))
+    app.add_handler(CallbackQueryHandler(handle_category_calendar, pattern='^catcal:'))
+    app.add_handler(CallbackQueryHandler(handle_category_calendar_nav, pattern='^catcal_nav:'))
+    app.add_handler(CallbackQueryHandler(handle_category_pick, pattern='^catpick:'))
+    app.add_handler(CallbackQueryHandler(handle_review, pattern='^rv:'))
 
     app.add_handler(CallbackQueryHandler(handle_navigation, pattern='^nav:'))
 

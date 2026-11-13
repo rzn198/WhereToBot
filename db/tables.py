@@ -14,6 +14,7 @@ class Tables:
     CHANNELS              = 'channels'
     AI_PARSE_SEEN         = 'ai_parse_seen'
     EVENT_AI_CATEGORIES   = 'event_ai_categories'
+    EVENT_REVIEWS         = 'event_reviews'
     DEDUP_RUNS            = 'dedup_runs'
     DEDUP_DECISIONS       = 'dedup_decisions'
     DEDUP_DATES           = 'dedup_dates'

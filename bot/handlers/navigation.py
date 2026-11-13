@@ -28,7 +28,7 @@ async def handle_navigation(
         await show_main_menu(update, context)
         return
 
-    if data == 'nav:counter':
+    if data in ('nav:counter', 'nav:date'):
         await query.answer()
         return
 

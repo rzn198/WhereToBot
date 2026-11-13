@@ -76,12 +76,23 @@ async def load_event_ids(
 
     if filter_name.startswith('cat:'):
         # лента категории: посты и события от сегодня до горизонта, мульти-категории входят в каждую
-        category = get_category(filter_name[4:])
+        # 'cat:<code>' — вся категория, 'cat:<code>:date:<ISO>' — категория на один день
+        code, _, rest = filter_name[4:].partition(':')
+        category = get_category(code)
         if category is None:
             return []
-        rows = await pool.fetch(
-            feed_sql(), user_id, EVENTS_CITY, horizon_days(), list(category.db_values)
-        )
+        if rest.startswith('date:'):
+            try:
+                day = date.fromisoformat(rest[5:])
+            except ValueError:
+                return []
+            rows = await pool.fetch(
+                feed_sql(day=True), user_id, EVENTS_CITY, horizon_days(), list(category.db_values), day
+            )
+        else:
+            rows = await pool.fetch(
+                feed_sql(), user_id, EVENTS_CITY, horizon_days(), list(category.db_values)
+            )
         return _rows_to_refs(rows)
 
     if filter_name.startswith('date:'):
@@ -202,8 +213,14 @@ async def show_current_event(
     fav = event['is_fav']
     preview_chars = config.get('ui', {}).get('preview_chars', 300)
 
-    # внутри ленты категории на карточке есть кнопка «К категориям»
-    back_to_categories = str(context.user_data.get('current_filter', '')).startswith('cat:')
+    # внутри ленты категории на карточке есть кнопка «К категории»
+    current_filter = str(context.user_data.get('current_filter', ''))
+    category_code = current_filter[4:].split(':', 1)[0] if current_filter.startswith('cat:') else None
+    is_admin = user_id == config['telegram']['admin_user_id']
+    under_review = False
+    if is_admin:
+        from bot.handlers.reviews import is_under_review
+        under_review = await is_under_review(pool, ref)
 
     if event['kind'] == 'e':
         card = build_event_card(event, expanded=expanded, preview_chars=preview_chars)
@@ -213,7 +230,10 @@ async def show_current_event(
             surrogate_id=ref,
             is_favorite=fav,
             is_preview=card.is_preview,
-            back_to_categories=back_to_categories,
+            category_code=category_code,
+            event_date=event.get('starts_at'),
+            is_admin=is_admin,
+            under_review=under_review,
         )
         await edit_or_send(
             context=context,
@@ -272,7 +292,10 @@ async def show_current_event(
         surrogate_id=ref,
         is_favorite=fav,
         is_preview=is_preview,
-        back_to_categories=back_to_categories,
+        category_code=category_code,
+        event_date=event.get('date'),
+        is_admin=is_admin,
+        under_review=under_review,
     )
 
     await edit_or_send(
