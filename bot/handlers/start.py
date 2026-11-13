@@ -3,7 +3,9 @@ from telegram import Update
 from telegram.ext import ContextTypes
 from telegram.error import TelegramError
 from bot.keyboards.main_menu import get_main_menu_inline, MENU_TEXT
+from bot.handlers.events import EVENTS_CITY
 from bot.middleware.stats import update_user_stats
+from bot.utils.categories import load_menu_counts
 from bot.utils.messenger import edit_or_send
 from db.tables import Tables
 from shared.config import config
@@ -27,7 +29,13 @@ async def show_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     user_id = update.effective_user.id if update.effective_user else 0
     admin_id = config['telegram']['admin_user_id']
     is_admin = user_id == admin_id
-    keyboard = get_main_menu_inline(is_admin=is_admin)
+    counts = None
+    if is_admin and pool:
+        try:
+            counts = await load_menu_counts(pool, user_id, EVENTS_CITY)
+        except Exception as e:
+            logger.warning(f"MENU_COUNTS_FAILED | {type(e).__name__}: {e}")
+    keyboard = get_main_menu_inline(is_admin=is_admin, counts=counts)
 
     is_start_command = (
         update.message is not None

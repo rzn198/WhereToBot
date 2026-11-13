@@ -10,6 +10,7 @@ os.environ.setdefault('APP_ENV', 'production')
 
 from loguru import logger
 
+from db.review_cleanup import ReviewCleanupJob
 from deduplicator import notify
 from deduplicator.audit import audit_from_cfg
 from deduplicator.lock import try_lock
@@ -58,6 +59,14 @@ async def tick(pool, client, cfg: dict, st: ServiceSettings, *, now=None, send=N
     return res
 
 
+async def run_after_jobs(res, hook, reviews_job) -> int | None:
+    """Задачи, которые идут ПОСЛЕ остальных: чистка пересмотров — только когда в этом такте не было прогона
+    дедупликации (res is None) и перевод не работает. Если прогон или перевод идут, подождёт следующего такта."""
+    if res is not None or hook.running:
+        return None
+    return await reviews_job.run_if_due()
+
+
 async def main():
     from db.connection import close_db_pool, init_db_pool
     from db.validators import validate_config_tables
@@ -93,11 +102,14 @@ async def main():
     if dedup_on and tst.run_on_start:
         hook.trigger('start')
 
+    reviews_job = ReviewCleanupJob(pool, lambda: config.get('event_reviews') or {})
+
     try:
         while True:
             try:
-                await tick(pool, client, cfg, st, on_ok=lambda _res: hook.trigger('dedup_ok'))
+                res = await tick(pool, client, cfg, st, on_ok=lambda _res: hook.trigger('dedup_ok'))
                 hook.poll()
+                await run_after_jobs(res, hook, reviews_job)
             except Exception as e:
                 logger.exception(f"DEDUP_SERVICE_TICK_ERROR | {type(e).__name__}: {e}")
             await asyncio.sleep(st.poll_seconds)
