@@ -2,7 +2,13 @@ from datetime import date, datetime
 
 from telegram import InlineKeyboardMarkup, InlineKeyboardButton
 
-from bot.formatters.event_card import format_date_ru
+
+_WEEKDAYS = ('Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс')
+
+
+def format_date_short(day: date) -> str:
+    """'Пт 14.11' — день недели и число.месяц."""
+    return f'{_WEEKDAYS[day.weekday()]} {day.day:02d}.{day.month:02d}'
 
 
 def _as_date(value) -> date | None:
@@ -21,19 +27,14 @@ def get_event_nav_keyboard(
     event_date=None,
     is_admin: bool = False,
     under_review: bool = False,
+    reviewed: bool = False,
 ) -> InlineKeyboardMarkup:
     """Кнопки карточки.
 
     category_code — код категории, из ленты которой открыта карточка: появляется кнопка «К категории».
     event_date    — дата события: над стрелками показывается некликабельная кнопка с датой.
-    is_admin      — админу добавляется кнопка пересмотра (или «На пересмотре», если пересмотр уже открыт).
+    is_admin      — админу добавляется кнопка пересмотра («На пересмотре» / «Пересмотрено» — неактивные).
     """
-    counter_or_expand = (
-        InlineKeyboardButton('📋 Полностью', callback_data='nav:expand')
-        if is_preview else
-        InlineKeyboardButton(f'{current_index + 1} / {total}', callback_data='nav:counter')
-    )
-
     fav_btn = InlineKeyboardButton(
         '❤️ В избранное' if not is_favorite else '❤️ Убрать',
         callback_data=f'fav:{"add" if not is_favorite else "remove"}:{surrogate_id}'
@@ -46,23 +47,30 @@ def get_event_nav_keyboard(
 
     rows = []
 
+    top = []
+    if is_preview:
+        top.append(InlineKeyboardButton('📋 Все описание', callback_data='nav:expand'))
     day = _as_date(event_date)
     if day is not None:
-        rows.append([InlineKeyboardButton(f'📅 {format_date_ru(day)}', callback_data='nav:date')])
+        top.append(InlineKeyboardButton(f'📅 {format_date_short(day)}', callback_data='nav:date'))
+    if top:
+        rows.append(top)
 
     rows.append([
         InlineKeyboardButton('🔙', callback_data='nav:prev'),
-        counter_or_expand,
+        InlineKeyboardButton(f'{current_index + 1} / {total}', callback_data='nav:counter'),
         InlineKeyboardButton('🔜', callback_data='nav:next'),
     ])
     rows.append([fav_btn, hide_btn])
 
     if is_admin:
-        rows.append([
-            InlineKeyboardButton('⏳ На пересмотре', callback_data='rv:busy')
-            if under_review else
-            InlineKeyboardButton('🔎 Пересмотр', callback_data=f'rv:open:{surrogate_id}')
-        ])
+        if reviewed:
+            review_btn = InlineKeyboardButton('✅ Пересмотрено', callback_data='rv:busy')
+        elif under_review:
+            review_btn = InlineKeyboardButton('⏳ На пересмотре', callback_data='rv:busy')
+        else:
+            review_btn = InlineKeyboardButton('🔎 Пересмотр', callback_data=f'rv:open:{surrogate_id}')
+        rows.append([review_btn])
 
     rows.append(
         [

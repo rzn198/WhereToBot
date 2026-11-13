@@ -24,6 +24,8 @@ def _first_image(images) -> str | None:
 
 _NEW_DESC = "COALESCE(EXCLUDED.description, {t}.description)"
 _NEW_IMG = "COALESCE(EXCLUDED.images, {t}.images)"
+# Категорию, выбранную админом кнопкой (category_manual), скрейпер и AI не перезаписывают.
+_NEW_TYPES = "CASE WHEN {t}.category_manual THEN {t}.event_types ELSE EXCLUDED.event_types END"
 
 _UPSERT_SQL = f"""
 INSERT INTO {EVENTS_TABLE} (
@@ -44,7 +46,7 @@ ON CONFLICT (source_url) DO UPDATE SET
     country        = COALESCE(EXCLUDED.country, {EVENTS_TABLE}.country),
     images         = {_NEW_IMG.format(t=EVENTS_TABLE)},
     dedup_key      = EXCLUDED.dedup_key,
-    event_types    = EXCLUDED.event_types,
+    event_types    = {_NEW_TYPES.format(t=EVENTS_TABLE)},
     description_ru = CASE
         WHEN {_NEW_DESC.format(t=EVENTS_TABLE)} IS DISTINCT FROM {EVENTS_TABLE}.description
         THEN NULL ELSE {EVENTS_TABLE}.description_ru END,
@@ -61,7 +63,7 @@ WHERE (
     COALESCE(EXCLUDED.venue, {EVENTS_TABLE}.venue),
     COALESCE(EXCLUDED.city, {EVENTS_TABLE}.city),
     COALESCE(EXCLUDED.country, {EVENTS_TABLE}.country),
-    {_NEW_IMG.format(t=EVENTS_TABLE)}, EXCLUDED.dedup_key, EXCLUDED.event_types
+    {_NEW_IMG.format(t=EVENTS_TABLE)}, EXCLUDED.dedup_key, {_NEW_TYPES.format(t=EVENTS_TABLE)}
 )
 RETURNING (xmax = 0) AS inserted
 """

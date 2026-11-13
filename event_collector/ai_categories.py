@@ -177,13 +177,13 @@ class EventCategoryAI:
             return c
 
     async def _hidden_urls(self, pool, items: list[EventItem]) -> set[str]:
-        """source_url записей, которые в БД уже скрыты админом/дедупом/сверкой: AI их не пересчитывает.
+        """source_url записей, которые в БД уже скрыты админом/дедупом/сверкой или имеют ручную категорию: AI их не пересчитывает.
         Сбой БД не должен блокировать категоризацию — тогда считаем, что скрытых нет."""
         if pool is None or not items:
             return set()
         try:
             rows = await pool.fetch(
-                "SELECT source_url FROM events WHERE source = $1 AND hidden_by_admin = TRUE "
+                "SELECT source_url FROM events WHERE source = $1 AND (hidden_by_admin OR category_manual) "
                 "AND source_url = ANY($2::text[])", items[0].source, [i.source_url for i in items])
             return {r['source_url'] for r in rows}
         except Exception as e:

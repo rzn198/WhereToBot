@@ -2,7 +2,7 @@
 
     event_reviews:
       cleanup_before: "2026-12-01"   # удалить пересмотры, созданные ДО этой даты; пусто / нет ключа = чистка выключена
-      only_resolved: true            # true — только закрытые (status = 'resolved'); false — вместе с открытыми
+      only_resolved: true            # true — только закрытые (status = 'resolved' или 'applied'); false — вместе с открытыми
 
 Запускается из сервиса дедупликатора после остальных его задач (прогон дедупликации и перевод) не чаще раза в сутки
 на одно значение настроек. Дата в будущем и непонятное значение игнорируются с предупреждением в логе — чтобы случайная
@@ -61,7 +61,7 @@ async def purge_reviews(pool, st: ReviewCleanupSettings) -> int:
         return 0
     sql = f"DELETE FROM {Tables.EVENT_REVIEWS} WHERE created_at < $1::date"
     if st.only_resolved:
-        sql += " AND status = 'resolved'"
+        sql += " AND status IN ('resolved', 'applied')"
     return _count(await pool.execute(sql, st.before))
 
 
