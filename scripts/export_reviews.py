@@ -20,10 +20,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 os.environ.setdefault('APP_ENV', 'production')
 
 from db.connection import close_db_pool, init_db_pool  # noqa: E402
-
-COLUMNS = ['id', 'created_at', 'flow', 'status', 'kind', 'reason_code', 'reason_text', 'correct_category', 'correct_date',
-           'title', 'starts_at', 'venue', 'source', 'source_url', 'event_types', 'description',
-           'event_id', 'message_id', 'resolved_at', 'resolution_note']
+from db.review_export import COLUMNS  # noqa: E402
 
 
 def _cell(v):

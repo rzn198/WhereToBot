@@ -27,6 +27,49 @@ async def send_admin(text: str) -> bool:
         return False
 
 
+async def send_document(data: bytes, filename: str, caption: str = '') -> bool:
+    """Отправка файла админу (как send_admin); сбой отправки только в лог."""
+    from shared.config import config
+    tg = config.get('telegram') or {}
+    token, admin_id = tg.get('bot_token'), tg.get('admin_user_id')
+    if not token or not admin_id:
+        logger.warning("DEDUP_FILE_SKIPPED | нет TELEGRAM_BOT_TOKEN/ADMIN_USER_ID")
+        return False
+    try:
+        import io
+        from telegram import Bot
+        async with Bot(token) as bot:
+            await bot.send_document(chat_id=admin_id, document=io.BytesIO(data), filename=filename, caption=caption[:1000])
+        return True
+    except Exception as e:
+        logger.error(f"DEDUP_FILE_ERROR | {filename} | {e}")
+        return False
+
+
+async def send_run_files(pool, res, method: str, send_file=None) -> int:
+    """Два CSV после прогона: изменения прогона и снимок действующих решений. Сбой сборки/отправки не ломает сервис.
+    Возвращает число отправленных файлов."""
+    from datetime import date
+    from deduplicator import report_csv
+    send_file = send_file or send_document
+    stamp = date.today().strftime('%Y%m%d')
+    run = res.run_id or 0
+    sent = 0
+    for name, builder, caption in (
+        (f"dedup_run{run}_changes_{stamp}.csv", lambda: report_csv.build_changes(pool, res, method),
+         f"Дедупликатор, прогон {run}: изменения этого прогона"),
+        (f"dedup_current_{stamp}.csv", lambda: report_csv.build_current(pool),
+         "Дедупликатор: все действующие решения (сегодня и позже)"),
+    ):
+        try:
+            data = await builder()
+            if data and await send_file(data, name, caption):
+                sent += 1
+        except Exception as e:
+            logger.error(f"DEDUP_REPORT_CSV_ERROR | {name} | {type(e).__name__}: {e}")
+    return sent
+
+
 def _snippet(text: str, n: int = 60) -> str:
     s = ' '.join((text or '').split())
     return s if len(s) <= n else s[:n] + '…'

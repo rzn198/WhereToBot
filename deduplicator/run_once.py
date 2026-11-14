@@ -102,6 +102,8 @@ async def run_once(pool, cfg: dict, args, *, client=None, send=None, out=print) 
         text = notify.run_report(res, method)
         if text:
             await (send or notify.send_admin)(text)
+            if send is None:                      # реальная отправка: текст + два CSV; в тестах с подставным send файлов нет
+                await notify.send_run_files(pool, res, method)
     return 0
 
 
