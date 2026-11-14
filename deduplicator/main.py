@@ -20,7 +20,7 @@ from shared.ai import client_from_config
 from translator.service import TranslationHook, translation_settings
 
 
-async def tick(pool, client, cfg: dict, st: ServiceSettings, *, now=None, send=None, on_ok=None):
+async def tick(pool, client, cfg: dict, st: ServiceSettings, *, now=None, send=None, on_ok=None, send_file=None):
     """Один проход: решаем, пора ли запускаться; если да — прогон и сообщения админу. Возвращает RunResult или None."""
     method = cfg.get('method', 'legacy')
     if method not in ('shadow', 'ai'):
@@ -51,6 +51,9 @@ async def tick(pool, client, cfg: dict, st: ServiceSettings, *, now=None, send=N
         for t in texts:
             if t:
                 await send(t)
+        # Полный отчёт файлами: только когда текстовый отчёт был (есть что показать). Тест с подставным send без send_file файлы не шлёт.
+        if res.status == 'ok' and texts[-1] and (send_file is not None or send is notify.send_admin):
+            await notify.send_run_files(pool, res, method, send_file)
     if res.status == 'ok' and on_ok is not None:
         try:
             on_ok(res)                    # перевод победителей запускается ТОЛЬКО после успешного прогона
