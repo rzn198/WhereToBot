@@ -222,3 +222,50 @@ async def test_catch_up_runs_only_inside_window(monkeypatch):
     monkeypatch.setitem(config, "push", {**config["push"], "mode": "shadow", "time": "00:00", "catchup_until": "23:59"})
     await push.catch_up_push(MagicMock(), MagicMock())
     assert send.await_count == 1
+
+
+# ------------------------------------------------------------------ ссылка поста ведёт на карточку в боте
+def test_post_link_points_to_bot_card_when_bot_name_known():
+    items = [Item("m", "Пост про концерт", "", "https://t.me/clubx/55", ref=77),
+             Item("e", "Событие", "", "https://tickets.example/e")]
+    [(text, ents)] = build_messages(items, DAY, DAY, bot_username="WhereToBotBG")
+    assert link_texts(text, ents) == [("Открыть в боте", "https://t.me/WhereToBotBG?start=fav_77"),
+                                      ("Событие", "https://tickets.example/e")]     # событие по-прежнему на билеты
+
+
+def test_post_link_falls_back_to_channel_without_bot_name_or_ref():
+    item = Item("m", "Пост", "", "https://t.me/clubx/55", ref=77)
+    [(text, ents)] = build_messages([item], DAY, DAY)
+    assert link_texts(text, ents) == [("Открыть пост", "https://t.me/clubx/55")]
+    [(text, ents)] = build_messages([Item("m", "Пост", "", "https://t.me/clubx/55")], DAY, DAY, bot_username="b")
+    assert link_texts(text, ents) == [("Открыть пост", "https://t.me/clubx/55")]
+
+
+def test_deep_link_payload_fits_telegram_limits():
+    from bot.utils.links import FAV_START_RE, bot_card_url
+    url = bot_card_url("@WhereToBotBG", 123456789)
+    assert url == "https://t.me/WhereToBotBG?start=fav_123456789"
+    payload = url.split("start=")[1]
+    assert len(payload) <= 64 and FAV_START_RE.match(payload)
+    for bad in ("fav_", "fav_x", "fav_1; DROP", "fav_-5", "fav_" + "9" * 30, "other_5", "fav_5 6"):
+        assert not FAV_START_RE.match(bad)
+
+
+async def test_bot_username_prefers_attribute_then_get_me_then_none():
+    bot = MagicMock(username="AttrBot")
+    assert await push.bot_username(bot) == "AttrBot"
+    bot = MagicMock()
+    bot.get_me = AsyncMock(return_value=MagicMock(username="MeBot"))
+    assert await push.bot_username(bot) == "MeBot"
+    bot.get_me = AsyncMock(side_effect=NetworkError("down"))
+    assert await push.bot_username(bot) is None
+
+
+# ------------------------------------------------------------------ кнопка «Открыть в канале» на карточке поста
+def test_post_card_keyboard_has_channel_button_only_with_url():
+    from bot.keyboards.event_nav import get_event_nav_keyboard
+    with_url = get_event_nav_keyboard(0, 3, 5, False, source_url="https://t.me/clubx/55").inline_keyboard
+    btn = [b for r in with_url for b in r if b.text == "📎 Открыть в канале"]
+    assert len(btn) == 1 and btn[0].url == "https://t.me/clubx/55"
+    without = get_event_nav_keyboard(0, 3, 5, False).inline_keyboard
+    assert not [b for r in without for b in r if "канале" in b.text]

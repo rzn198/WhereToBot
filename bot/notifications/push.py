@@ -16,6 +16,7 @@ from telegram import Bot, InlineKeyboardButton, InlineKeyboardMarkup, LinkPrevie
 from telegram.error import BadRequest, Forbidden, RetryAfter, TelegramError
 
 from bot.formatters.event_card import format_date_ru
+from bot.utils.links import bot_card_url, post_url
 from collector.entities.utf16 import utf16_len
 from db import push_log
 from db.tables import Tables
@@ -38,7 +39,8 @@ class Item:
     kind: str            # 'm' пост | 'e' событие
     text: str            # пост: текст; событие: название
     venue: str = ''
-    url: str = ''        # куда ведёт ссылка ('' — ссылки нет)
+    url: str = ''        # событие: билеты (source_url); пост: оригинал в канале ('' — ссылки нет)
+    ref: int | None = None   # пост: surrogate_id — по нему ссылка ведёт на карточку в боте
 
 
 def belgrade_today() -> date:
@@ -57,17 +59,7 @@ def shorten(text: str, limit: int) -> str:
     return cut.rstrip(' ,.;:!?-–—(') + '…'
 
 
-def post_url(username: str | None, channel_id: int | None, tg_id: int | None) -> str:
-    if not tg_id:
-        return ''
-    if username:
-        return f"https://t.me/{username.lstrip('@')}/{tg_id}"
-    if channel_id:
-        return f"https://t.me/c/{channel_id}/{tg_id}"
-    return ''
-
-
-def _block(i: int, item: Item, max_chars: int) -> tuple[str, list[tuple[int, int, str]]]:
+def _block(i: int, item: Item, max_chars: int, bot_username: str | None = None) -> tuple[str, list[tuple[int, int, str]]]:
     """Текст одного пункта и ссылки в нём: (смещение, длина, url) в UTF-16."""
     prefix = f'{i}. '
     links: list[tuple[int, int, str]] = []
@@ -82,21 +74,25 @@ def _block(i: int, item: Item, max_chars: int) -> tuple[str, list[tuple[int, int
         return text, links
     body = shorten(item.text, max_chars) or '(без текста)'
     text = prefix + body
-    if item.url:
-        label = 'Открыть пост'
+    # пост: ссылка на карточку в избранном (бот); нет имени бота — оригинал в канале
+    if bot_username and item.ref:
+        url, label = bot_card_url(bot_username, item.ref), 'Открыть в боте'
+    else:
+        url, label = item.url, 'Открыть пост'
+    if url:
         text += ' · '
-        links.append((utf16_len(text), utf16_len(label), item.url))
+        links.append((utf16_len(text), utf16_len(label), url))
         text += label
     return text, links
 
 
 def build_messages(items: list[Item], day: date, today: date | None = None, max_chars: int | None = None,
-                   header: str | None = None) -> list[tuple[str, list[MessageEntity]]]:
+                   header: str | None = None, bot_username: str | None = None) -> list[tuple[str, list[MessageEntity]]]:
     """Пуш → список сообщений (текст, ссылки). Заголовок в первом; нумерация сквозная."""
     cfg = config['push']
     max_chars = max_chars or cfg['max_chars']
     head = (header or cfg['header']).format(date=format_date_ru(day, today or day))
-    blocks = [_block(i, it, max_chars) for i, it in enumerate(items, 1)]
+    blocks = [_block(i, it, max_chars, bot_username) for i, it in enumerate(items, 1)]
 
     parts: list[tuple[str, list[MessageEntity]]] = []
     text, ents = head, []
@@ -121,6 +117,21 @@ def build_messages(items: list[Item], day: date, today: date | None = None, max_
     return parts
 
 
+async def bot_username(bot: Bot) -> str | None:
+    """Имя бота для ссылок на карточки. Нет имени — пуш не ломается, ссылки постов ведут на оригинал в канале."""
+    try:
+        name = bot.username
+    except Exception:
+        name = None
+    if not (isinstance(name, str) and name):
+        try:
+            name = (await bot.get_me()).username
+        except Exception as e:
+            logger.warning(f"PUSH_BOT_USERNAME_FAILED | {type(e).__name__}: {e}")
+            return None
+    return name if isinstance(name, str) and name else None
+
+
 def keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([
         [InlineKeyboardButton('⭐ В избранное', callback_data=OPEN_FAVORITES)],
@@ -130,7 +141,7 @@ def keyboard() -> InlineKeyboardMarkup:
 
 _SELECT_FAV = f"""
 SELECT f.user_id, 0 AS ord, m.created_at AS c, COALESCE(m.text, '') AS title, ''::text AS venue,
-       m.id AS tg_id, m.channel_id, ch.username, ''::text AS url
+       m.surrogate_id AS sid, m.id AS tg_id, m.channel_id, ch.username, ''::text AS url
 FROM {Tables.FAVORITES} f
 JOIN {Tables.MESSAGES} m ON m.surrogate_id = f.msg_id
 LEFT JOIN {Tables.CHANNELS} ch ON ch.channel_id = m.channel_id
@@ -139,7 +150,7 @@ WHERE m.date = $1
   AND ($2::bigint IS NULL OR f.user_id = $2)
   AND m.surrogate_id NOT IN (SELECT msg_id FROM {Tables.HIDDEN_EVENTS} WHERE user_id = f.user_id)
 UNION ALL
-SELECT ef.user_id, 1, e.created_at, e.title, COALESCE(e.venue, ''), NULL::bigint, NULL::bigint, NULL::text,
+SELECT ef.user_id, 1, e.created_at, e.title, COALESCE(e.venue, ''), NULL::bigint, NULL::bigint, NULL::bigint, NULL::text,
        COALESCE(e.source_url, '')
 FROM {Tables.EVENT_FAVORITES} ef
 JOIN {Tables.EVENTS} e ON e.id = ef.event_id
@@ -153,7 +164,7 @@ ORDER BY user_id, ord, c
 
 def _item(r) -> Item:
     if r['ord'] == 0:
-        return Item('m', r['title'], '', post_url(r['username'], r['channel_id'], r['tg_id']))
+        return Item('m', r['title'], '', post_url(r['username'], r['channel_id'], r['tg_id']), ref=r['sid'])
     return Item('e', r['title'], r['venue'], r['url'])
 
 
@@ -251,8 +262,10 @@ async def send_push_notifications(bot: Bot, pool, today: date | None = None) -> 
         todo = [u for u in by_user if u not in done]
         logger.info(f"PUSH_USERS | total={len(by_user)} already_sent={len(done & set(by_user))} todo={len(todo)}")
 
+        username = await bot_username(bot)
+
         async def attempt(user_id: int) -> tuple[str, int, int, str | None]:
-            parts = build_messages(by_user[user_id], today, today)
+            parts = build_messages(by_user[user_id], today, today, bot_username=username)
             status, n, err = await deliver(bot, user_id, parts)
             if status == 'failed' and n:
                 # часть сообщений уже ушла: повтор прислал бы дубль, считаем доставленным
@@ -335,7 +348,7 @@ async def send_preview(bot: Bot, pool, admin_id: int) -> str:
         items, note = demo, 'в вашем избранном пусто, показан образец из событий сегодняшнего дня'
     if not items:
         return 'Показать нечего: в избранном пусто и сегодня нет событий.'
-    parts = build_messages(items, day, today)
+    parts = build_messages(items, day, today, bot_username=await bot_username(bot))
     await bot.send_message(chat_id=admin_id, text=f'🧪 Предпросмотр пуша: {note}. Сообщений: {len(parts)}.')
     status, n, err = await deliver(bot, admin_id, parts)
     return 'Отправлено ✅' if status == 'sent' else f'Не удалось отправить: {err}'
@@ -343,12 +356,12 @@ async def send_preview(bot: Bot, pool, admin_id: int) -> str:
 
 async def _demo_items(pool, day: date) -> list[Item]:
     rows = await pool.fetch(f"""
-        (SELECT 0 AS ord, COALESCE(m.text, '') AS title, ''::text AS venue, m.id AS tg_id, m.channel_id, ch.username,
+        (SELECT 0 AS ord, COALESCE(m.text, '') AS title, ''::text AS venue, m.surrogate_id AS sid, m.id AS tg_id, m.channel_id, ch.username,
                 ''::text AS url
          FROM {Tables.MESSAGES} m LEFT JOIN {Tables.CHANNELS} ch ON ch.channel_id = m.channel_id
          WHERE m.date = $1 AND m.hidden_by_admin = FALSE AND m.position = 0 ORDER BY m.created_at LIMIT 2)
         UNION ALL
-        (SELECT 1, e.title, COALESCE(e.venue, ''), NULL::bigint, NULL::bigint, NULL::text, COALESCE(e.source_url, '')
+        (SELECT 1, e.title, COALESCE(e.venue, ''), NULL::bigint, NULL::bigint, NULL::bigint, NULL::text, COALESCE(e.source_url, '')
          FROM {Tables.EVENTS} e WHERE e.starts_at = $1 AND e.hidden_by_admin = FALSE ORDER BY e.created_at LIMIT 3)
     """, day)
     return [_item(r) for r in rows]

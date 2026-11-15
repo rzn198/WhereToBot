@@ -22,7 +22,8 @@ U1, U2, U3 = 101, 102, 103
 @pytest.fixture
 async def pool(monkeypatch):
     p = await asyncpg.create_pool(DSN, min_size=1, max_size=5)
-    for t in ("channels", "messages", "events", "favorites", "event_favorites", "hidden_events", "event_hidden", "push_log"):
+    for t in ("dedup_decisions", "channels", "messages", "events", "favorites", "event_favorites", "hidden_events",
+              "event_hidden", "push_log"):
         await p.execute(f"TRUNCATE {t} RESTART IDENTITY CASCADE")
     monkeypatch.setattr(push, "SEND_DELAY", 0)
     monkeypatch.setattr(push, "RETRY_PAUSE", 0)
@@ -329,3 +330,125 @@ async def test_favorites_button_works_when_old_menu_already_gone(pool):
     bot.delete_message = AsyncMock(side_effect=BadRequest("Message to delete not found"))
     await alert_dismiss.handle_alert_open_favorites(update, context)
     assert bot.send_message.await_count == 1 and context.user_data["menu_message_id"] == 1234
+
+
+# ------------------------------------------------------------------ ссылка поста: пуш → /start fav_<id> → карточка
+def _start_context(pool, args, menu_id=800, msg_id=950):
+    bot = MagicMock()
+    bot.delete_message = AsyncMock()
+    bot.edit_message_text = AsyncMock()
+    bot.edit_message_media = AsyncMock()
+    bot.send_photo = AsyncMock()
+    bot.send_message = AsyncMock(return_value=MagicMock(message_id=1234))
+    update = MagicMock()
+    update.message.message_id = msg_id
+    update.message.text = "/start " + " ".join(args)
+    update.effective_chat.id = U1
+    update.effective_user.id = U1
+    context = MagicMock(bot=bot)
+    context.args = args
+    context.bot_data = {"pool": pool}
+    context.user_data = {"menu_message_id": menu_id, "message_type": "text", "user_id": U1}
+    return bot, update, context
+
+
+def texts(bot):
+    return [c.kwargs.get("text") for c in bot.send_message.call_args_list]
+
+
+async def test_push_sends_deep_link_for_posts_and_it_opens_that_card(pool):
+    from bot.handlers.start import handle_start
+    today = date.today()
+    first = await post(pool, 1, day=today, text="Первый избранный пост")
+    second = await post(pool, 2, day=today, text="Второй избранный пост")
+    for p_ in (first, second):
+        await put(pool, U1, "m", p_, "fav")
+    bot = make_bot()
+    bot.get_me = AsyncMock(return_value=MagicMock(username="WhereToBotBG"))
+    await push.send_push_notifications(bot, pool, today=today)
+    msg = to_user(bot, U1)[0]
+    urls = [e.url for e in msg["entities"]]
+    assert urls == [f"https://t.me/WhereToBotBG?start=fav_{first}", f"https://t.me/WhereToBotBG?start=fav_{second}"]
+    # нажатие на вторую ссылку
+    payload = urls[1].split("start=")[1]
+    bot2, update, context = _start_context(pool, [payload])
+    await handle_start(update, context)
+    assert context.user_data["event_ids"] == [first, second] and context.user_data["current_index"] == 1
+    assert "Второй избранный пост" in bot2.send_message.call_args.kwargs["text"]
+    assert sorted(c.kwargs["message_id"] for c in bot2.delete_message.call_args_list) == [800, 950]   # /start и старое меню
+    assert bot2.edit_message_text.await_count == 0
+    assert context.user_data["menu_message_id"] == 1234
+
+
+async def test_card_link_opens_winner_when_post_was_hidden_as_duplicate(pool):
+    from bot.handlers.start import handle_start
+    from tests.test_fav_transfer_pg import decide
+    today = date.today()
+    loser = await post(pool, 1, day=today, text="Проигравший дубль", hidden=True)
+    winner = await post(pool, 2, day=today, text="Победитель дубля")
+    await put(pool, U1, "m", winner, "fav")
+    await pool.execute("INSERT INTO dedup_decisions (day, winner_kind, winner_id, loser_kind, loser_id, status, decided_by, model, reason) "
+                       "VALUES ($1,'m',$2,'m',$3,'active','ai','m1','то же')", today, winner, loser)
+    bot, update, context = _start_context(pool, [f"fav_{loser}"])
+    await handle_start(update, context)
+    assert context.user_data["event_ids"] == [winner] and "Победитель дубля" in bot.send_message.call_args.kwargs["text"]
+    assert MISSING not in texts(bot)
+
+
+MISSING = "Этого события уже нет в избранном"
+
+
+async def test_card_link_when_star_removed_shows_notice_then_general_list(pool):
+    from bot.handlers.start import handle_start
+    today = date.today()
+    gone = await post(pool, 1, day=today, text="Снятый с избранного")
+    kept = await post(pool, 2, day=today, text="Остался в избранном")
+    await put(pool, U1, "m", kept, "fav")
+    bot, update, context = _start_context(pool, [f"fav_{gone}"])
+    await handle_start(update, context)
+    sent = texts(bot)
+    assert sent[0] == MISSING and "Остался в избранном" in sent[1]
+    assert context.user_data["event_ids"] == [kept] and context.user_data["current_index"] == 0
+
+
+async def test_card_link_with_empty_favorites_and_unknown_id(pool):
+    from bot.handlers.start import handle_start
+    bot, update, context = _start_context(pool, ["fav_999999"])
+    await handle_start(update, context)
+    sent = texts(bot)
+    assert sent[0] == MISSING and "не найдено" in sent[1]
+
+
+async def test_card_link_cannot_open_someone_elses_favorite(pool):
+    from bot.handlers.start import handle_start
+    today = date.today()
+    other = await post(pool, 1, day=today, text="Чужое избранное")
+    await put(pool, U2, "m", other, "fav")
+    bot, update, context = _start_context(pool, [f"fav_{other}"])
+    await handle_start(update, context)
+    assert all("Чужое избранное" not in (t or "") for t in texts(bot)) and texts(bot)[0] == MISSING
+
+
+async def test_plain_start_and_bad_payloads_still_show_main_menu(pool):
+    from bot.handlers.start import handle_start
+    for args in ([], ["fav_x"], ["something"], ["fav_1", "fav_2"]):
+        bot, update, context = _start_context(pool, args)
+        await handle_start(update, context)
+        assert "event_ids" not in context.user_data, args
+
+
+async def test_post_card_shows_open_in_channel_button(pool):
+    from bot.handlers.events import fetch_event_by_id
+    from bot.handlers.start import handle_start
+    await channel(pool, 111, "clubx")
+    today = date.today()
+    p_ = await post(pool, 55, ch=111, day=today, text="Пост из открытого канала")
+    closed = await post(pool, 66, ch=222, day=today, text="Пост из закрытого канала")
+    for x in (p_, closed):
+        await put(pool, U1, "m", x, "fav")
+    assert (await fetch_event_by_id(pool, p_, U1))["channel_url"] == "https://t.me/clubx/55"
+    assert (await fetch_event_by_id(pool, closed, U1))["channel_url"] == "https://t.me/c/222/66"
+    bot, update, context = _start_context(pool, [f"fav_{p_}"])
+    await handle_start(update, context)
+    buttons = [b for r in bot.send_message.call_args.kwargs["reply_markup"].inline_keyboard for b in r]
+    assert [b.url for b in buttons if b.text == "📎 Открыть в канале"] == ["https://t.me/clubx/55"]

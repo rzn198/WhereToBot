@@ -8,6 +8,7 @@ from collector.entities.truncator import truncate_if_needed, EventText
 from collector.entities.utf16 import utf16_len
 from db.tables import Tables
 from bot.keyboards.event_nav import get_event_nav_keyboard
+from bot.utils.links import post_url
 from bot.formatters.event import build_entities
 from bot.formatters.event_card import build_event_card
 from bot.utils.categories import feed_sql, get_category, horizon_days
@@ -162,11 +163,13 @@ async def fetch_event_by_id(
         SELECT
             m.surrogate_id, m.text, m.entities, m.date,
             m.photo_file_id, m.storage_message_id, m.hidden_by_admin,
+            m.id AS tg_id, m.channel_id, ch.username AS channel_username,
             EXISTS(
                 SELECT 1 FROM {Tables.FAVORITES}
                 WHERE user_id = $2 AND msg_id = m.surrogate_id
             ) as is_fav
         FROM {Tables.MESSAGES} m
+        LEFT JOIN {Tables.CHANNELS} ch ON ch.channel_id = m.channel_id
         WHERE m.surrogate_id = $1
     """, ref, user_id)
 
@@ -175,6 +178,7 @@ async def fetch_event_by_id(
 
     result = dict(row)
     result['kind'] = 'm'
+    result['channel_url'] = post_url(result.get('channel_username'), result.get('channel_id'), result.get('tg_id'))
 
     entities = result.get('entities')
     if isinstance(entities, str):
@@ -310,6 +314,7 @@ async def show_current_event(
         is_preview=is_preview,
         category_code=category_code,
         event_date=event.get('date'),
+        source_url=event.get('channel_url') or None,
         is_admin=is_admin,
         under_review=under_review,
         reviewed=reviewed,
@@ -358,8 +363,9 @@ async def open_filter(
     update: Update,
     context: ContextTypes.DEFAULT_TYPE,
     filter_name: str,
+    start_ref: Ref | None = None,
 ) -> None:
-    """Открыть список по фильтру (callback уже подтверждён вызывающим)."""
+    """Открыть список по фильтру (callback уже подтверждён вызывающим). start_ref — карточка, с которой начать."""
     pool = context.bot_data.get('pool')
     user_id = update.effective_user.id
 
@@ -369,7 +375,7 @@ async def open_filter(
     event_ids = await load_event_ids(pool, user_id, filter_name)
 
     context.user_data['event_ids'] = event_ids
-    context.user_data['current_index'] = 0
+    context.user_data['current_index'] = event_ids.index(start_ref) if start_ref in event_ids else 0
     context.user_data['current_filter'] = filter_name
 
     await show_current_event(update, context, pool)
