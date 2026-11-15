@@ -13,7 +13,7 @@ from telegram.ext import ContextTypes
 
 from bot.handlers.reviews import is_admin_user
 from bot.utils.messenger import edit_or_send
-from db import review_export
+from db import fav_moves_export, review_export
 
 
 def build_menu_keyboard() -> InlineKeyboardMarkup:
@@ -64,3 +64,26 @@ async def handle_review_export(update: Update, context: ContextTypes.DEFAULT_TYP
         caption=f"{label}: {len(rows)} шт.",
     )
     logger.info(f"REVIEW_EXPORT | scope={scope} | rows={len(rows)}")
+
+
+async def handle_fav_moves_export(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """«⚙️ Админка» → «📤 Перенос избранного»: CSV со всеми переносами ⭐/🙈 при дедупликации (callback fvx:get)."""
+    query = update.callback_query
+    if not is_admin_user(update.effective_user.id if update.effective_user else None):
+        await query.answer('Недоступно', show_alert=True)
+        return
+    pool = context.bot_data.get('pool')
+    try:
+        rows = await fav_moves_export.fetch_rows(pool)
+    except Exception as e:
+        logger.error(f"FAV_MOVES_EXPORT_FAILED | {type(e).__name__}: {e}")
+        await query.answer('Не удалось выгрузить', show_alert=True)
+        return
+    if not rows:
+        await query.answer('Переносов нет', show_alert=True)
+        return
+    await query.answer()
+    await context.bot.send_document(
+        chat_id=update.effective_chat.id, document=io.BytesIO(fav_moves_export.to_csv_bytes(rows)),
+        filename=f"dedup_fav_moves_all_{date.today():%Y%m%d}.csv", caption=f"Перенос избранного и скрытий: {len(rows)} шт.")
+    logger.info(f"FAV_MOVES_EXPORT | rows={len(rows)}")

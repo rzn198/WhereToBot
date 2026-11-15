@@ -3,13 +3,14 @@ from __future__ import annotations
 
 import json
 import re
+from collections.abc import Callable
 from dataclasses import dataclass
 
 from loguru import logger
 
 from deduplicator.records import KIND_EVENT, Record
 
-PROMPT_VERSION = 'v3'
+PROMPT_VERSION = 'v4'
 MAX_REASON = 200
 
 SYSTEM_PROMPT = (
@@ -45,8 +46,13 @@ def _one_line(text: str, limit: int) -> str:
     return s if len(s) <= limit else s[:limit] + '…'
 
 
-def build_prompt(records: list[Record], labels: dict[tuple, str], max_chars: int = 300) -> tuple[str, dict[str, Record]]:
-    """(текст запроса, {короткий id -> запись}). Короткие id не дают модели путать номера из БД."""
+SAME_SOURCE_TAG = "повтор внутри источника допустим"
+
+
+def build_prompt(records: list[Record], labels: dict[tuple, str], max_chars: int = 300,
+                 same_ok: Callable[[Record], bool] | None = None) -> tuple[str, dict[str, Record]]:
+    """(текст запроса, {короткий id -> запись}). Короткие id не дают модели путать номера из БД.
+    same_ok(запись) — можно ли сравнивать эту запись с другими записями ТОГО ЖЕ источника (каналы, polako)."""
     index: dict[str, Record] = {}
     lines = []
     for i, r in enumerate(records, 1):
@@ -58,9 +64,11 @@ def build_prompt(records: list[Record], labels: dict[tuple, str], max_chars: int
             if r.city:
                 tags.append(f"город: {r.city}")
         if r.is_digest:
-            tags.append("СПИСОК событий одного дня")
+            tags.append("лёгкая строка: одно событие из подборки канала")
         elif r.is_list:
             tags.append("ПЕРЕЧЕНЬ нескольких событий")
+        if same_ok is not None and same_ok(r):
+            tags.append(SAME_SOURCE_TAG)
         lines.append(f"[{rid}] ({'; '.join(tags)}) {_one_line(r.text, max_chars)}")
     day = records[0].day.isoformat() if records else ''
     prompt = (
@@ -70,8 +78,15 @@ def build_prompt(records: list[Record], labels: dict[tuple, str], max_chars: int
         "- Дубль — это то же событие: тот же исполнитель/название и то же место (и время, если указано). "
         "Одна и та же тема или одно и то же место — ещё не дубль: разные события в одном клубе в один день "
         "не объединяй.\n"
-        "- Записи одного источника между собой не сравнивай.\n"
-        "- Пост-афиша, подборка или СПИСОК событий — не дубль отдельного анонса и не дубль другого списка. "
+        "- Записи одного источника между собой не сравнивай. Исключение: записи с пометкой «" + SAME_SOURCE_TAG + "» "
+        "можно объединять с другой записью того же источника, но только если это явный повтор того же анонса "
+        "(копия, напоминание, розыгрыш билетов на то же событие, исправленный анонс): то же событие, то же место "
+        "и время. Разные события одного организатора не объединяй.\n"
+        "- Запись с пометкой «лёгкая строка» — одно событие из подборки канала. Её можно объединять с анонсом "
+        "того же события, в том числе из того же канала; в группе она проигрывает.\n"
+        "- Выступление, секция или отдельная программа внутри фестиваля — не дубль самого фестиваля (и наоборот), "
+        "если у них разное место или время. Объединяй только анонсы одного и того же выступления.\n"
+        "- Пост-афиша, подборка или ПЕРЕЧЕНЬ событий — не дубль отдельного анонса и не дубль другого перечня. "
         "Объединяй такую запись с другой, только если в ней описано именно то же событие, что в другой записи.\n"
         "- Дайджест, афиша недели или подборка (в записи описаны два и более разных события, пусть даже "
         "два-три) не может быть победителем и не может быть скрыта. Не включай такую запись в группы: перечисли её id "
@@ -121,9 +136,10 @@ def _salvage(raw: str) -> dict | None:
     return out
 
 
-def parse_groups(raw: str, index: dict[str, Record]) -> Groups:
+def parse_groups(raw: str, index: dict[str, Record], same_ok: Callable[[Record], bool] | None = None) -> Groups:
     """Строгая проверка. Формат сломан → BadGroupingOutput (дату пропускаем, отпечаток не обновляем).
-    Отдельные плохие группы (чужой id, одна запись, один источник, повтор записи) отбрасываются."""
+    Отдельные плохие группы (чужой id, одна запись, повтор записи) отбрасываются; группа из одного источника
+    остаётся, только если этому источнику разрешены повторы внутри себя (same_ok)."""
     try:
         data = _load_json(raw)
     except BadGroupingOutput:
@@ -153,7 +169,8 @@ def parse_groups(raw: str, index: dict[str, Record]) -> Groups:
             if x in index and x not in used and x not in clean:
                 clean.append(x)
         members = [index[x] for x in clean]
-        if len(members) < 2 or len({m.source for m in members}) < 2:
+        one_source = len({m.source for m in members}) < 2
+        if len(members) < 2 or (one_source and not (same_ok is not None and same_ok(members[0]))):
             logger.debug(f"DEDUP_GROUP_DROPPED | меньше двух записей из разных источников: {ids!r}")
             continue
         used.update(clean)

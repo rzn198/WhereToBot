@@ -84,7 +84,7 @@ from bot.handlers.calendar import (
 )
 
 from bot.handlers.reviews import handle_review, handle_review_text
-from bot.handlers.review_export import handle_review_export
+from bot.handlers.review_export import handle_fav_moves_export, handle_review_export
 from bot.handlers.unnamed import handle_unnamed, handle_unnamed_text
 from bot.handlers.categories import (
     handle_categories_menu,
@@ -213,6 +213,7 @@ async def main():
     app.add_handler(CallbackQueryHandler(handle_review, pattern='^rv:'))
     app.add_handler(CallbackQueryHandler(handle_unnamed, pattern='^un:'))
     app.add_handler(CallbackQueryHandler(handle_review_export, pattern='^rvx:'))
+    app.add_handler(CallbackQueryHandler(handle_fav_moves_export, pattern='^fvx:'))
 
     app.add_handler(CallbackQueryHandler(handle_navigation, pattern='^nav:'))
 

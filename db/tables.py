@@ -18,4 +18,5 @@ class Tables:
     DEDUP_RUNS            = 'dedup_runs'
     DEDUP_DECISIONS       = 'dedup_decisions'
     DEDUP_DATES           = 'dedup_dates'
+    FAVORITE_MOVES        = 'favorite_moves'
     COLLECTOR_RUNS        = 'collector_runs'
