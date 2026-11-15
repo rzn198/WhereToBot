@@ -32,7 +32,7 @@ from bot.handlers.events import handle_filter
 from bot.handlers.navigation import handle_navigation
 from bot.handlers.favorites import handle_favorites
 from bot.handlers.hidden import handle_hide
-from bot.handlers.alert_dismiss import handle_alert_dismiss
+from bot.handlers.alert_dismiss import handle_alert_dismiss, handle_alert_open_favorites
 from bot.handlers.contact import (
     handle_contact_inline,
     handle_contact_write,
@@ -61,6 +61,7 @@ from bot.handlers.admin_panel import (
     handle_admin_restart_confirm,
     handle_admin_cleanup,
     handle_admin_cleanup_confirm,
+    handle_admin_push_preview,
     handle_admin_hidden_events,
     handle_admin_hidden_nav,
     handle_admin_hidden_date,
@@ -245,6 +246,7 @@ async def main():
     app.add_handler(CallbackQueryHandler(handle_admin_restart_confirm, pattern='^admin_panel:restart_confirm$'))
 
     app.add_handler(CallbackQueryHandler(handle_admin_cleanup, pattern='^admin_panel:cleanup$'))
+    app.add_handler(CallbackQueryHandler(handle_admin_push_preview, pattern='^admin_panel:push_preview$'))
     app.add_handler(CallbackQueryHandler(handle_admin_cleanup_confirm, pattern='^admin_panel:cleanup_confirm$'))
 
     app.add_handler(CallbackQueryHandler(handle_admin_hidden_events, pattern='^admin_panel:hidden_events$'))
@@ -276,6 +278,7 @@ async def main():
     app.add_handler(CallbackQueryHandler(handle_cinema_back_to_movie, pattern='^cinema:back_to_movie:'))
 
     app.add_handler(CallbackQueryHandler(handle_alert_dismiss, pattern='^alert:dismiss$'))
+    app.add_handler(CallbackQueryHandler(handle_alert_open_favorites, pattern='^alert:fav$'))
 
     app.add_handler(MessageHandler(
         filters.TEXT & filters.ChatType.PRIVATE,

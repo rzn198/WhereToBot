@@ -20,3 +20,4 @@ class Tables:
     DEDUP_DATES           = 'dedup_dates'
     FAVORITE_MOVES        = 'favorite_moves'
     COLLECTOR_RUNS        = 'collector_runs'
+    PUSH_LOG              = 'push_log'

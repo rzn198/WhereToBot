@@ -1,8 +1,10 @@
+from datetime import datetime, timedelta, timezone
+
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from loguru import logger
 import shutil
 from shared.config import config
-from bot.notifications.push import send_push_notifications
+from bot.notifications.push import catch_up_push, send_push_notifications
 from bot.alerts import send_scheduled_alerts
 from bot.middleware.locks import cleanup_stale_locks
 
@@ -33,21 +35,37 @@ async def job_check_disk(bot) -> None:
 
 def start_bot_scheduler(bot, pool) -> AsyncIOScheduler:
     cfg = config['scheduler']
-    alert_time = cfg['push_alert_time']
-    hour, minute = map(int, alert_time.split(':'))
+    push_cfg = config['push']
+    hour, minute = map(int, push_cfg['time'].split(':'))
 
     scheduler = AsyncIOScheduler(timezone='UTC')
 
-    scheduler.add_job(
-        send_push_notifications,
-        trigger='cron',
-        hour=hour,
-        minute=minute,
-        args=[bot, pool],
-        id='push_notifications',
-        name='Push notifications',
-        max_instances=1,
-    )
+    if push_cfg['mode'] == 'off':
+        logger.info("Push disabled (push.mode: off)")
+    else:
+        scheduler.add_job(
+            send_push_notifications,
+            trigger='cron',
+            hour=hour,
+            minute=minute,
+            timezone=push_cfg['timezone'],       # время рассылки — по Белграду
+            args=[bot, pool],
+            id='push_notifications',
+            name='Push notifications',
+            max_instances=1,
+            coalesce=True,
+            misfire_grace_time=3600,
+        )
+        # бот мог лежать в момент рассылки: при старте досылаем тем, кому не ушло (окно push.time … push.catchup_until)
+        scheduler.add_job(
+            catch_up_push,
+            trigger='date',
+            run_date=datetime.now(timezone.utc) + timedelta(seconds=30),
+            args=[bot, pool],
+            id='push_catchup',
+            name='Push catch-up',
+            max_instances=1,
+        )
 
     scheduler.add_job(
         job_cleanup,
@@ -89,5 +107,5 @@ def start_bot_scheduler(bot, pool) -> AsyncIOScheduler:
     )
 
     scheduler.start()
-    logger.info(f"Bot scheduler started | push_time={alert_time} UTC")
+    logger.info(f"Bot scheduler started | push={push_cfg['mode']} {push_cfg['time']} {push_cfg['timezone']}")
     return scheduler

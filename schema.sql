@@ -370,3 +370,16 @@ CREATE TABLE IF NOT EXISTS favorite_moves (
 CREATE UNIQUE INDEX IF NOT EXISTS uq_favorite_moves_decision_user ON favorite_moves (decision_id, user_id);
 CREATE INDEX IF NOT EXISTS idx_favorite_moves_date ON favorite_moves (event_date);
 CREATE INDEX IF NOT EXISTS idx_favorite_moves_winner ON favorite_moves (winner_kind, winner_id);
+
+-- Журнал ежедневных пушей из избранного (см. migrations/015_push_log.sql)
+CREATE TABLE IF NOT EXISTS push_log (
+    push_date   DATE         NOT NULL,
+    user_id     BIGINT       NOT NULL,
+    status      TEXT         NOT NULL CHECK (status IN ('sent', 'blocked', 'failed')),
+    items       INT          NOT NULL DEFAULT 0,
+    parts       INT          NOT NULL DEFAULT 1,
+    error       TEXT,
+    sent_at     TIMESTAMPTZ  NOT NULL DEFAULT now(),
+    PRIMARY KEY (push_date, user_id)
+);
+CREATE INDEX IF NOT EXISTS idx_push_log_user_status ON push_log (user_id, status, push_date);
