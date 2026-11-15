@@ -1,16 +1,24 @@
+"""balkan-promo.com — концерты Balkan Promo (с ноября 2026 сайт на собственной вёрстке).
+
+Источник данных — главная страница: JSON в <script type="application/json" id="gigs"> со всеми концертами сезона
+(название, дата ISO, клуб, адрес, картинка, ссылка на страницу концерта, билеты, признак отмены).
+Страница концерта (/koncerty/<id>/) читается только ради описания — если не удалось, событие всё равно сохраняется.
+"""
 from __future__ import annotations
 
 import asyncio
+import json
 import re
-from datetime import datetime, timezone
+from datetime import date, datetime
 from zoneinfo import ZoneInfo
 
 import httpx
 from loguru import logger
 from selectolax.parser import HTMLParser
 
-from event_collector.scrapers.base import BaseScraper, EventItem
+from event_collector.city_normalizer import find_city_in_text
 from event_collector.normalize import build_dedup_key
+from event_collector.scrapers.base import BaseScraper, EventItem
 
 BELGRADE_TZ = ZoneInfo('Europe/Belgrade')
 HOME = "https://balkan-promo.com/"
@@ -18,31 +26,64 @@ BASE = "https://balkan-promo.com"
 TIMEOUT = 20
 EVENT_DELAY = 0.3
 UA = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
+START_HOUR = 20                      # время сайт не отдаёт — как и раньше, 20:00 (в БД хранится только дата)
 
 FIXED_CATEGORY = ["Концерты"]
 
 _SERVICE_MARKERS = (
-    "билеты придут", "скачать сразу после оплаты", "подберите одежду",
-    "минимальное количество ценных", "минимум ценных вещей",
-    "боитесь простудиться", "только самое нужное",
-    "криптовалют", "trc20", "без комиссии при покупке",
-    "tickets without commission", "tickets will be sent",
-    "email address you provided", "@ti", "на почту", "purchase tickets",
+    "билет приходит", "билеты придут", "скачайте билет", "криптовалют", "trc20", "без комиссии",
+    "кнопка", "ticketscloud", "xtix", "ticketshop", "на почту", "tickets will be sent", "email address",
 )
+# Фраза описания всего сайта на главной и общих страницах — не описание концерта
+_GENERIC_DESCRIPTIONS = ("рок, метал и панк в клубах",)
 
-MONTHS = {
-    "january": 1, "february": 2, "march": 3, "april": 4, "may": 5, "june": 6,
-    "july": 7, "august": 8, "september": 9, "october": 10, "november": 11, "december": 12,
-    "января": 1, "февраля": 2, "марта": 3, "апреля": 4, "мая": 5, "июня": 6,
-    "июля": 7, "августа": 8, "сентября": 9, "октября": 10, "ноября": 11, "декабря": 12,
-    "januar": 1, "februar": 2, "mart": 3, "maj": 5, "jun": 6,
-    "jul": 7, "avgust": 8, "septembar": 9, "oktobar": 10, "novembar": 11, "decembar": 12,
-}
 
-_DATE_RE = re.compile(r"(\d{1,2})\s+(\S+)")
-_BR_SPLIT = re.compile(r"<br\s*/?>", re.I)
-_TAG_RE = re.compile(r"<[^>]+>")
-_CUR_RE = re.compile(r"\b(RSD|EUR|RUB|DIN)\b", re.I)
+def _abs(url: str | None) -> str | None:
+    if not url:
+        return None
+    return url if url.startswith("http") else f"{BASE}/{url.lstrip('/')}"
+
+
+def parse_gigs(html: str) -> list[dict] | None:
+    """Список концертов из JSON главной. None — блока нет или он не разобрался (вёрстка изменилась)."""
+    node = HTMLParser(html).css_first('script#gigs')
+    if node is None:
+        return None
+    try:
+        data = json.loads(node.text(strip=False))
+    except (ValueError, TypeError):
+        return None
+    return data if isinstance(data, list) else None
+
+
+def club_addresses(html: str) -> dict[str, str]:
+    """Адрес клуба по его ссылке (/kluby/<id>/) из блока «Где проходят концерты»."""
+    out: dict[str, str] = {}
+    tree = HTMLParser(html)
+    for block in tree.css('#kluby .club, #kluby .amb'):
+        link = block.css_first('h3 a')
+        addr = block.css_first('.addr')
+        if link and addr:
+            out[link.attributes.get('href', '')] = addr.text(strip=True)
+    return out
+
+
+def extract_description(html: str) -> str | None:
+    """Описание концерта: блок «О концерте» (section.c-about) целиком, абзацы через пустую строку.
+    og:description не берём: на сайте это «Название: дата, клуб, город. ...» обрезанное до ~160 символов (на полуслове).
+    Если блока нет (у концерта нет описания) — None: лучше пустое описание, чем шаблонная строка из даты и клуба."""
+    tree = HTMLParser(html)
+    block = tree.css_first('section.c-about')
+    if block is None:
+        return None
+    parts = []
+    for p in block.css('p'):
+        txt = p.text(strip=True)
+        low = txt.lower()
+        if len(txt) < 20 or any(mk in low for mk in _SERVICE_MARKERS) or any(g in low for g in _GENERIC_DESCRIPTIONS):
+            continue
+        parts.append(txt)
+    return '\n\n'.join(parts) or None
 
 
 class BalkanPromoScraper(BaseScraper):
@@ -55,172 +96,75 @@ class BalkanPromoScraper(BaseScraper):
         logger.info("BALKAN_FETCH | start")
         self.listed_count = None
 
-        async with httpx.AsyncClient(timeout=TIMEOUT, headers=UA,
-                                     follow_redirects=True) as client:
-            urls = await self._collect_urls(client)
-            logger.info(f"BALKAN_URLS | count={len(urls)}")
-            self.listed_count = len(urls)
+        async with httpx.AsyncClient(timeout=TIMEOUT, headers=UA, follow_redirects=True) as client:
+            r = await client.get(HOME)
+            r.raise_for_status()
+            gigs = parse_gigs(r.text)
+            if gigs is None:
+                logger.warning("BALKAN_LISTING_CHANGED | блок #gigs не найден или не разобрался: вёрстка сайта изменилась")
+                self.listed_count = 0
+                return []
+            addresses = club_addresses(r.text)
+            self.listed_count = len(gigs)
+            logger.info(f"BALKAN_URLS | count={len(gigs)}")
 
+            today = datetime.now(BELGRADE_TZ).date()
             items: list[EventItem] = []
-            now = datetime.now(timezone.utc)
-            for url in urls:
+            for gig in gigs:
                 try:
-                    item = await self._fetch_event(client, url, now)
-                    if item:
-                        items.append(item)
+                    item = self._build_item(gig, addresses, today)
+                    if item is None:
+                        continue
+                    item.description = await self._fetch_description(client, item.source_url)
+                    items.append(item)
                 except Exception as e:
-                    logger.warning(f"BALKAN_EVENT_ERROR | {url} | {e}")
+                    logger.warning(f"BALKAN_EVENT_ERROR | {gig.get('u')} | {type(e).__name__}: {e}")
                 await asyncio.sleep(EVENT_DELAY)
 
         logger.info(f"BALKAN_DONE | total_events={len(items)}")
         return items
 
-    async def _collect_urls(self, client) -> list[str]:
-        r = await client.get(HOME)
-        r.raise_for_status()
-        tree = HTMLParser(r.text)
-        seen: set[str] = set()
-        ordered: list[str] = []
-        for card in tree.css(".flexbe-card"):
-            link = card.css_first(".component-button a")
-            if not link:
-                continue
-            href = link.attributes.get("href", "")
-            if not href or "contacts" in href.lower():
-                continue
-            url = href if href.startswith("http") else f"{BASE}/{href.lstrip('/')}"
-            if url not in seen:
-                seen.add(url)
-                ordered.append(url)
-        return ordered
-
-    async def _fetch_event(self, client, url: str, now: datetime) -> EventItem | None:
-        r = await client.get(url)
-        r.raise_for_status()
-        t = HTMLParser(r.text)
-
-        tt = t.css_first("head title")
-        title = None
-        if tt:
-            raw = tt.text(strip=True)
-            title = re.sub(r"^Афиша выступлений\s+", "", raw)
-            title = re.sub(r"\s+на Балканах$", "", title)
-            title = re.sub(r"^Poster of\s+", "", title, flags=re.I)
-            title = re.sub(r"\s+performances?\s+in\s+the\s+Balkans$", "", title, flags=re.I)
-            title = title.strip() or None
-        if not title:
+    def _build_item(self, gig: dict, addresses: dict[str, str], today: date) -> EventItem | None:
+        title = (gig.get('n') or '').strip()
+        url = _abs(gig.get('u'))
+        if not title or not url:
+            return None
+        if gig.get('s') == 'cancelled':
+            logger.debug(f"BALKAN_CANCELLED | {title} | {gig.get('d')}")
+            return None
+        try:
+            day = date.fromisoformat(gig.get('d') or '')
+        except ValueError:
+            logger.debug(f"BALKAN_NO_DATE | {title} | d={gig.get('d')!r}")
+            return None
+        if day < today:
+            logger.debug(f"BALKAN_PAST | {title} | {day}")
             return None
 
-        date_str, venue, city, tickets = self._parse_table(t, url)
-        starts_at = self._parse_date(date_str, now)
-        if not starts_at:
-            logger.debug(f"BALKAN_NO_DATE | {title} | date_str={date_str!r}")
-            return None
-        if starts_at < now:
-            logger.debug(f"BALKAN_PAST | {title} | {starts_at.date()}")
-            return None
-
-        images = self._extract_image(t, url)
-        description = self._extract_description(t)
+        starts_at = datetime(day.year, day.month, day.day, START_HOUR, 0, tzinfo=BELGRADE_TZ)
+        club_url = gig.get('cu') or ''
+        city_text = f"{gig.get('where') or ''}, {addresses.get(club_url, '')}"
+        city = find_city_in_text(city_text, default="Belgrade")
 
         return EventItem(
             source=self.source,
             source_url=url,
             title=title,
-            description=description,
             starts_at=starts_at,
-            venue=venue,
+            venue=(gig.get('club') or '').strip() or None,
             city=city,
             country="RS",
             event_types=list(FIXED_CATEGORY),
             category_basis='fixed',
-            images=images,
+            images=_abs(gig.get('img')),
             dedup_key=build_dedup_key(title, starts_at, city),
         )
 
-    def _parse_table(self, tree, url: str):
-        date_str = venue = city = None
-        tickets = []
-        row = tree.css_first('[role="row"]')
-        if not row:
-            return date_str, venue, city, tickets
-        cells = row.css('[role="cell"]')
-        for i, cell in enumerate(cells):
-            if i == 0:
-                date_str = cell.text(strip=True)
-            elif i == 1:
-                et = cell.css_first(".element-text")
-                cell_html = (et.html if et else cell.html) or ""
-                parts = [_TAG_RE.sub("", p).strip()
-                         for p in _BR_SPLIT.split(cell_html)]
-                parts = [p for p in parts if p]
-                if len(parts) >= 2:
-                    city, venue = parts[0], parts[1]
-                elif len(parts) == 1:
-                    venue = parts[0]
-            else:
-                link_node = cell.css_first("a")
-                link = link_node.attributes.get("href") if link_node else None
-                btn = cell.css_first(".btn-text")
-                btn_text = (btn.text(strip=True) if btn else cell.text(strip=True)) or ""
-                if "crypto" in btn_text.lower():
-                    continue
-                cm = _CUR_RE.search(btn_text)
-                currency = cm.group(1).upper() if cm else None
-                if currency == "DIN":
-                    currency = "RSD"
-                if currency and link:
-                    tickets.append({
-                        "type": currency, "currency": currency, "url": link,
-                    })
-        if not tickets:
-            tickets = [{"url": url, "currency": "RSD"}]
-        return date_str, venue, city, tickets
-
-    def _parse_date(self, date_str: str | None, now: datetime) -> datetime | None:
-        if not date_str:
-            return None
-        m = _DATE_RE.search(date_str)
-        if not m:
-            return None
-        day = int(m.group(1))
-        month = MONTHS.get(m.group(2).lower())
-        if not month:
-            logger.warning(f"BALKAN_UNKNOWN_MONTH | {m.group(2)!r}")
-            return None
-        today = now.astimezone(BELGRADE_TZ).date()
-        year = today.year
+    async def _fetch_description(self, client, url: str) -> str | None:
         try:
-            dt = datetime(year, month, day, 20, 0, tzinfo=BELGRADE_TZ)
-        except ValueError:
+            r = await client.get(url)
+            r.raise_for_status()
+            return extract_description(r.text)
+        except Exception as e:
+            logger.debug(f"BALKAN_DESC_SKIP | {url} | {type(e).__name__}: {e}")
             return None
-        if dt.date() < today:
-            try:
-                dt = datetime(year + 1, month, day, 20, 0, tzinfo=BELGRADE_TZ)
-            except ValueError:
-                return None
-        return dt
-
-    def _extract_description(self, tree) -> str | None:
-        for n in tree.css('.element-text, [class*="text-holder"]'):
-            txt = n.text(strip=True)
-            if len(txt) < 80:
-                continue
-            low = txt.lower()
-            if any(marker in low for marker in _SERVICE_MARKERS):
-                continue
-            return txt
-        return None
-
-    def _extract_image(self, tree, url: str) -> list[str]:
-        bg = tree.css_first('div.component-bg[data-img-id]')
-        if bg:
-            img_id = bg.attributes.get("data-img-id")
-            img_ext = bg.attributes.get("data-img-ext")
-            if img_id and img_ext:
-                return [f"{BASE}/img/{img_id}.{img_ext}"]
-        og = tree.css_first('meta[property="og:image"]')
-        if og and og.attributes.get("content"):
-            c = og.attributes["content"]
-            return [c if c.startswith("http") else f"{BASE}{c}"]
-        return []
