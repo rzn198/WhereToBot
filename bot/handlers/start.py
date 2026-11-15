@@ -4,6 +4,7 @@ from telegram.ext import ContextTypes
 from telegram.error import TelegramError
 from bot.keyboards.main_menu import get_main_menu_inline, MENU_TEXT
 from bot.handlers.events import EVENTS_CITY
+from bot.handlers.push_links import open_favorite_card, parse_start_payload
 from bot.middleware.stats import update_user_stats
 from bot.utils.categories import load_menu_counts
 from bot.utils.messenger import edit_or_send
@@ -16,6 +17,11 @@ async def handle_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     user = update.effective_user
     await update_user_stats(pool, update)
     logger.info(f"START | user_id={user.id if user else '?'}")
+    card_ref = parse_start_payload(context)
+    if card_ref is not None:
+        # ссылка поста из пуша (/start fav_<id>): открываем карточку в избранном
+        await open_favorite_card(update, context, card_ref)
+        return
     menu_message_id = context.user_data.get('menu_message_id')
     context.user_data.clear()
     if menu_message_id:
