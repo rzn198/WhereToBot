@@ -1,6 +1,7 @@
 import asyncpg
 from loguru import logger
 
+from db import push_log
 from db.ai_seen import purge_old
 from db.event_ai_cache import purge_orphans
 from db.tables import Tables
@@ -119,6 +120,11 @@ async def run_cleanup(pool: asyncpg.Pool) -> dict:
 
     seen_purged = await purge_old(pool, int((config.get('parsing') or {}).get('seen_retention_days', 60)))
     event_cats = await purge_orphans(pool)
+    try:
+        push_purged = await push_log.purge_old(pool)
+    except Exception as e:
+        push_purged = 0
+        logger.warning(f"PUSH_LOG_PURGE_FAILED | {type(e).__name__}: {e}")
     history = await purge_dedup_history(pool, int((config.get('deduplication') or {}).get('history_days', 60)))
 
     no_date_count = sum(1 for r in rows if r['no_date'])
@@ -128,7 +134,7 @@ async def run_cleanup(pool: asyncpg.Pool) -> dict:
     logger.info(
         f"CLEANUP | dated={dated_count} | no_date={no_date_count} | "
         f"held_by_dup_refs={held_count} | alerts_detached={alerts_detached} | "
-        f"events={events_deleted} | ai_seen={seen_purged} | event_ai_categories={event_cats} | dedup_history={history}"
+        f"events={events_deleted} | ai_seen={seen_purged} | event_ai_categories={event_cats} | dedup_history={history} | push_log={push_purged}"
     )
 
     return {

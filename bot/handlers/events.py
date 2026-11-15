@@ -351,6 +351,18 @@ async def handle_filter(
     else:
         filter_name = data.split(':')[1]
 
+    await open_filter(update, context, filter_name)
+
+
+async def open_filter(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+    filter_name: str,
+) -> None:
+    """Открыть список по фильтру (callback уже подтверждён вызывающим)."""
+    pool = context.bot_data.get('pool')
+    user_id = update.effective_user.id
+
     await update_user_stats(pool, update)
     logger.info(f"FILTER | user_id={user_id} | filter={filter_name}")
 

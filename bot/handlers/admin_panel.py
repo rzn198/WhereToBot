@@ -53,6 +53,7 @@ async def handle_admin_panel(
         [InlineKeyboardButton('🧹 Очистка', callback_data='admin_panel:cleanup')],
         [InlineKeyboardButton('👁 Скрытые события', callback_data='admin_panel:hidden_events')],
         [InlineKeyboardButton('📢 Алерт', callback_data='admin_panel:alert')],
+        [InlineKeyboardButton('📨 Предпросмотр пуша', callback_data='admin_panel:push_preview')],
         [InlineKeyboardButton('✏️ Новое сообщение', callback_data='admin_panel:new_event')],
         [InlineKeyboardButton('📤 Выгрузка пересмотров', callback_data='rvx:menu')],
         [InlineKeyboardButton('⭐ Перенос избранного (CSV)', callback_data='fvx:get')],
@@ -119,6 +120,29 @@ async def handle_admin_restart_confirm(
     logger.info(f"RESTART | admin_id={update.effective_user.id}")
 
     asyncio.get_event_loop().stop()
+
+async def handle_admin_push_preview(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+) -> None:
+    """Присылает админу пуш из его избранного (или образец), как его увидят пользователи. Журнал не пишется."""
+    query = update.callback_query
+    await query.answer()
+
+    if not await _require_admin(update):
+        return
+
+    from bot.notifications.push import send_preview
+    chat_id = update.effective_chat.id
+    pool = context.bot_data.get('pool')
+    try:
+        result = await send_preview(context.bot, pool, chat_id)
+    except Exception as e:
+        logger.error(f"PUSH_PREVIEW_ERROR | {type(e).__name__}: {e}")
+        result = f'Ошибка предпросмотра: {type(e).__name__}'
+    if not result.startswith('Отправлено'):
+        await context.bot.send_message(chat_id=chat_id, text=result)
+
 
 async def handle_admin_cleanup(
     update: Update,

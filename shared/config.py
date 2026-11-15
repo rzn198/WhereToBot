@@ -49,9 +49,43 @@ def load_config() -> dict:
     cfg['translation'] = _translation_section(cfg.get('translation') or {}, cfg['opencode'])
     cfg['parsing'] = _parsing_section(cfg.get('parsing') or {}, cfg['opencode'])
     cfg['deduplication'] = _dedup_section(cfg.get('deduplication') or {}, cfg['opencode'])
+    cfg['push'] = _push_section(cfg.get('push') or {}, cfg.get('scheduler') or {})
     cfg['event_categories'] = _event_categories_section((cfg.get('event_collector') or {}).get('categories') or {}, cfg['opencode'])
 
     return cfg
+
+
+PUSH_MODES = ('off', 'shadow', 'on')
+PUSH_TZ = 'Europe/Belgrade'
+PUSH_HEADER = '📅 Сегодня, {date}. Из вашего избранного:'
+
+
+def _hhmm(value, default: str) -> str:
+    """'9:5' / '09:00' → '09:00'; мусор → default."""
+    try:
+        h, m = str(value).strip().split(':')
+        h, m = int(h), int(m)
+        if 0 <= h < 24 and 0 <= m < 60:
+            return f'{h:02d}:{m:02d}'
+    except (ValueError, AttributeError):
+        pass
+    return default
+
+
+def _push_section(y: dict, sched: dict) -> dict:
+    """Ежедневный пуш «сегодня из вашего избранного».
+    mode: off (не запускается) | shadow (только лог, пользователям ничего не уходит) | on. Переопределяется PUSH_MODE.
+    time / catchup_until — по времени Белграда. max_chars — длина текста поста в строке пуша.
+    Время по умолчанию берётся из прежнего scheduler.push_alert_time."""
+    mode = (os.getenv('PUSH_MODE') or y.get('mode') or 'on').strip().lower()
+    return {
+        'mode': mode if mode in PUSH_MODES else 'on',
+        'time': _hhmm(y.get('time') or sched.get('push_alert_time'), '09:00'),
+        'catchup_until': _hhmm(y.get('catchup_until'), '20:00'),
+        'max_chars': min(1000, max(50, int(y.get('max_chars', 200)))),
+        'header': str(y.get('header') or PUSH_HEADER),
+        'timezone': PUSH_TZ,
+    }
 
 
 EVENT_CATEGORY_METHODS = ('source', 'shadow', 'ai')
