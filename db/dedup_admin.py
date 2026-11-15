@@ -2,8 +2,10 @@
 
 Каждое действие меняет `hidden_by_admin` у записей и `dedup_decisions` ОДНОЙ транзакцией, чтобы AI на следующем
 прогоне не спорил с админом:
-  * restore_loser  — «Вернуть»: проигравший снова виден, решение → reverted (AI больше его не скрывает);
+  * restore_loser  — «Вернуть»: проигравший снова виден, решение → reverted (AI больше его не скрывает).
+                     Избранное остаётся на победителе: пользователь уже видит его там (ТЗ: «Вернуть» при живом победителе);
   * swap_decision  — «Поменять местами»: проигравший становится победителем, бывший победитель скрыт;
+                     ⭐/🙈 пользователей переезжают на нового победителя;
   * show_record    — «Показать для всех»: снять скрытие; если запись скрыта решением AI — решение → reverted;
   * hide_record    — «Скрыть для всех»: ручное скрытие без решения (дедупликатор такую запись сам не вернёт).
 
@@ -17,6 +19,7 @@ from dataclasses import dataclass
 import asyncpg
 from loguru import logger
 
+from db import fav_transfer
 from db.tables import Tables
 
 KIND_MESSAGE = 'm'
@@ -158,6 +161,9 @@ async def swap_decision(pool: asyncpg.Pool, decision_id: int, admin_id: int | No
                 return Outcome(False, 'Победитель сам скрыт другим решением, поменять местами нельзя')
 
             await conn.execute(f"UPDATE {Tables.DEDUP_DECISIONS} SET status = 'stale', updated_at = now() WHERE id = $1", decision_id)
+            # перенос по старому решению откатываем: ⭐ бывшего проигравшего возвращаются на него же (он снова победитель)
+            await fav_transfer.rollback(conn, [decision_id])
+            await fav_transfer.repoint_winner(conn, (wk, wi), (lk, li))
             # прочие проигравшие бывшего победителя → под нового победителя
             await conn.execute(
                 f"UPDATE {Tables.DEDUP_DECISIONS} SET winner_kind = $1, winner_id = $2, updated_at = now() "
@@ -165,12 +171,13 @@ async def swap_decision(pool: asyncpg.Pool, decision_id: int, admin_id: int | No
                 lk, li, wk, wi, list(LIVE), decision_id)
             await conn.execute(
                 f"DELETE FROM {Tables.DEDUP_DECISIONS} WHERE status = 'proposed' AND loser_kind = $1 AND loser_id = $2", wk, wi)
-            await conn.execute(
+            new_id = await conn.fetchval(
                 f"INSERT INTO {Tables.DEDUP_DECISIONS} (day, winner_kind, winner_id, loser_kind, loser_id, status, decided_by, reason) "
-                f"VALUES ($1, $2, $3, $4, $5, 'active', 'admin', 'вручную: поменяли местами')",
+                f"VALUES ($1, $2, $3, $4, $5, 'active', 'admin', 'вручную: поменяли местами') RETURNING id",
                 d['day'], lk, li, wk, wi)
             await conn.execute(f"UPDATE {_table(wk)} SET hidden_by_admin = TRUE WHERE {_id_col(wk)} = $1", wi)
             await conn.execute(f"UPDATE {_table(lk)} SET hidden_by_admin = FALSE WHERE {_id_col(lk)} = $1", li)
+            await fav_transfer.transfer(conn, decision_id=new_id, day=d['day'], loser=(wk, wi), winner=(lk, li))
     _log('swap', admin_id, d)
     return Outcome(True, 'Поменяли местами')
 
@@ -218,6 +225,7 @@ async def release_ai_hidden(pool: asyncpg.Pool, *, include_admin: bool = False, 
                        events=sum(1 for r in rows if r['loser_kind'] == KIND_EVENT),
                        days=sorted({r['day'] for r in rows}), applied=False)
             if apply and rows:
+                await fav_transfer.rollback(conn, [r['id'] for r in rows])        # проигравшие воскресают вместе с ⭐/🙈
                 for kind in (KIND_MESSAGE, KIND_EVENT):
                     ids = [r['loser_id'] for r in rows if r['loser_kind'] == kind]
                     if ids:

@@ -5,8 +5,14 @@
       - "@channel_a"        канал (по @username из таблицы channels)
       - "ch:1234567890"     канал по числовому id
       - "event:kupikarte"   источник events (значение events.source)
-Не указанные в списке — ниже всех: сначала посты каналов, затем события; при равенстве выигрывает
+Приоритет строго по списку: типа записи (пост или событие) он не учитывает. Не указанные в списке — ниже всех:
+сначала посты каналов, затем события. При равенстве позиции (в том числе внутри одного источника) выигрывает
 запись с более длинным текстом, затем более ранняя.
+
+Записи ОДНОГО источника по умолчанию между собой не сравниваются. Исключения — в конфиге:
+    deduplication.ai.same_source:
+      - channels          все каналы
+      - event:polako      источник events (или "@channel" / "ch:<id>")
 """
 from __future__ import annotations
 
@@ -15,6 +21,7 @@ from loguru import logger
 from deduplicator.records import KIND_MESSAGE, Record
 
 UNLISTED = 10 ** 6
+DEFAULT_SAME_SOURCE = ('channels', 'event:polako')
 
 
 def _norm(entry: str) -> str:
@@ -68,3 +75,28 @@ class PriorityResolver:
         if bad:
             logger.warning(f"DEDUP_PRIORITY_UNRESOLVED | {bad} — канала нет в таблице channels "
                            "(коллектор записывает её при очередном прогоне); пока эти записи идут как не указанные")
+
+
+class SameSourcePolicy:
+    """В каких источниках дубли внутри ОДНОГО источника допустимы (повтор анонса в канале, две карточки polako).
+    Для остальных (ticketsrs, ticrs и др.) запрет остаётся: их записи — разные билетные категории и сеансы."""
+
+    def __init__(self, entries=None, channel_names: dict[int, str] | None = None):
+        raw = DEFAULT_SAME_SOURCE if entries is None else entries
+        self.entries = [_norm(e) if str(e).strip().lower() != 'channels' else 'channels'
+                        for e in raw if str(e).strip()]
+        self.all_channels = 'channels' in self.entries
+        self.exact = {e for e in self.entries if e != 'channels'}
+        self.channel_names = {int(k): '@' + str(v).lstrip('@').lower()
+                              for k, v in (channel_names or {}).items() if v}
+
+    def allows_source(self, source: str) -> bool:
+        if source.startswith('ch:'):
+            if self.all_channels or source in self.exact:
+                return True
+            name = self.channel_names.get(int(source[3:]))
+            return bool(name and name in self.exact)
+        return source.lower() in self.exact
+
+    def allows(self, rec: Record) -> bool:
+        return self.allows_source(rec.source)

@@ -9,8 +9,11 @@
     действующему победителю, даже если его источник выше по иерархии. При слиянии двух групп остаётся победитель
     с более ранним решением (меньший id в dedup_decisions), второй победитель и его проигравшие переходят под него.
     По иерархии победитель выбирается только у новой группы или когда прежний победитель пропал/скрыт/сменил дату;
-  * строки дайджестов (position > 0) могут побеждать, но сами не скрываются (в одной строке — целый
-    день событий, скрыть её из-за одного дубля нельзя);
+  * строки дайджестов (position > 0) — «лёгкие» записи об ОДНОМ событии: победить не могут, проиграть могут
+    (анонсу того же события из любого источника, в том числе поста того же канала, и как точные копии —
+    двойники, которые появляются при сдвиге позиций после правки поста). Перечни (position = 0, «Афиша
+    недели») по-прежнему не побеждают и не скрываются: в них много событий;
+  * записи одного источника сравниваются только там, где это разрешено в конфиге (каналы, polako): SameSourcePolicy;
   * «липкие пары»: действующее решение (проигравший скрыт победителем) не снимается только потому, что при пересчёте
     даты AI не повторил группу: модель отвечает нестабильно, и вернуть дубль в ленту из-за этого нельзя. Пара держится,
     пока целы обе записи, победитель виден и не проиграл другой записи, а проигравший не стал дайджестом/перечнем
@@ -27,7 +30,7 @@ from dataclasses import dataclass, field
 from datetime import date
 
 from deduplicator.grouping import Group
-from deduplicator.priority import PriorityResolver
+from deduplicator.priority import PriorityResolver, SameSourcePolicy
 from deduplicator.records import Record, norm_text
 
 Key = tuple[str, int]
@@ -74,14 +77,21 @@ class DayPlan:
 
 
 def eligible(members: list[Record], lists: set) -> list[Record]:
-    """Участники группы, которые могут победить или проиграть: без перечней и строк дайджеста."""
-    return [m for m in members if not m.is_list and not m.is_digest and m.key not in lists]
+    """Участники группы, которые могут победить или проиграть: без перечней. Строки дайджеста входят
+    (они могут проиграть), но победить не могут — см. order_group."""
+    return [m for m in members if not m.is_list and m.key not in lists]
+
+
+def pairable(a: Record, b: Record, policy: SameSourcePolicy | None) -> bool:
+    """Можно ли скрыть одну из двух записей в пользу другой: разные источники либо источник, которому
+    разрешены повторы внутри себя (каналы, polako)."""
+    return a.source != b.source or (policy is not None and policy.allows(a))
 
 
 def order_group(members: list[Record], lists: set, weak: set, resolver: PriorityResolver):
-    """(победитель | None, остальные участники по иерархии). Слабые записи победить не могут."""
+    """(победитель | None, остальные участники по иерархии). Слабые записи и строки дайджеста победить не могут."""
     ok = eligible(members, lists)
-    strong = sorted((m for m in ok if m.key not in weak), key=resolver.rank)
+    strong = sorted((m for m in ok if m.key not in weak and not m.is_digest), key=resolver.rank)
     if not strong:
         return None, []
     return strong[0], sorted((m for m in ok if m.key != strong[0].key), key=resolver.rank)
@@ -95,7 +105,8 @@ def candidates(records: list[Record], live: list[Live]) -> list[Record]:
 
 
 def plan_day(day: date, records: list[Record], groups: list[Group], live: list[Live],
-             resolver: PriorityResolver, method: str, hide_exact_copies: bool = True) -> DayPlan:
+             resolver: PriorityResolver, method: str, hide_exact_copies: bool = True,
+             same_source: SameSourcePolicy | None = None) -> DayPlan:
     """records — уже отфильтрованные candidates().
     hide_exact_copies: точные копии постов одного канала (тот же день, тот же текст) скрываются, остаётся лучшая
     по иерархии; работает и в днях без других источников. События с сайтов не трогаем: у двух сеансов
@@ -134,19 +145,19 @@ def plan_day(day: date, records: list[Record], groups: list[Group], live: list[L
         members = [m for m in g.members if m.key in recs]
         ok = eligible(members, plan.lists)
         # weak в новом ответе не лишает победителя места: победитель когда-то прошёл как сильный, а пометка модели нестабильна
-        incs = [m for m in ok if m.key in incumbent and m.key not in wanted]
+        incs = [m for m in ok if m.key in incumbent and m.key not in wanted and not m.is_digest]
         if incs:
             winner = min(incs, key=lambda m: (incumbent[m.key], resolver.rank(m)))
             rest = sorted((m for m in ok if m.key != winner.key), key=resolver.rank)
         else:
             winner, rest = order_group(members, plan.lists, plan.weak, resolver)
-        if winner is None or not any(m.source != winner.source for m in rest):
+        if winner is None or not any(pairable(winner, m, same_source) for m in rest):
             plan.group_winners.append(None)
             continue
         plan.group_winners.append(winner.key)
         winners.add(winner.key)
         for m in rest:
-            if m.source == winner.source or m.key in pinned or m.key in locked:
+            if not pairable(winner, m, same_source) or m.key in pinned or m.key in locked:
                 continue
             wanted[m.key] = NewDecision(loser=m, winner=winner, reason=g.reason)
             if m.key in incumbent:                       # слияние: прежний победитель и его проигравшие уходят под нового
@@ -154,19 +165,19 @@ def plan_day(day: date, records: list[Record], groups: list[Group], live: list[L
                 for lk in losers_of.get(m.key, ()):
                     t = recs.get(lk)
                     if (t is None or t.key in wanted or t.key in winners or t.key in pinned or t.key in locked
-                            or t.source == winner.source or t.is_list or t.is_digest or t.key in plan.lists):
+                            or not pairable(winner, t, same_source) or t.is_list or t.key in plan.lists):
                         continue
                     wanted[t.key] = NewDecision(loser=t, winner=winner, reason=g.reason or 'слияние групп', via='merge')
 
     # точные копии проигравшего (тот же источник, тот же текст) уходят вместе с ним, даже если AI их не назвал
     copies: dict[tuple, list[Record]] = {}
     for r in records:
-        if not r.is_list and not r.is_digest and r.key not in plan.lists and len(norm_text(r.text)) >= 20:
+        if not r.is_list and r.key not in plan.lists and len(norm_text(r.text)) >= 20:
             copies.setdefault((r.source, norm_text(r.text)), []).append(r)
     for nd in list(wanted.values()):
         for t in copies.get((nd.loser.source, norm_text(nd.loser.text)), []):
             if (t.key in wanted or t.key in winners or t.key in pinned or t.key in locked
-                    or t.source == nd.winner.source):
+                    or not pairable(nd.winner, t, same_source)):
                 continue
             wanted[t.key] = NewDecision(loser=t, winner=nd.winner, reason=nd.reason or 'точная копия скрытой записи',
                                         via='exact_copy')
@@ -174,7 +185,7 @@ def plan_day(day: date, records: list[Record], groups: list[Group], live: list[L
     if hide_exact_copies:
         same_source: dict[tuple, list[Record]] = {}
         for r in records:
-            if (r.kind == 'm' and not r.is_list and not r.is_digest and r.key not in plan.lists
+            if (r.kind == 'm' and not r.is_list and r.key not in plan.lists
                     and len(norm_text(r.text)) >= 20):
                 same_source.setdefault((r.source, norm_text(r.text)), []).append(r)
         for members in same_source.values():
@@ -217,11 +228,12 @@ def plan_day(day: date, records: list[Record], groups: list[Group], live: list[L
 def _sticky(loser: Record | None, winner: Record | None, plan: DayPlan, wanted: dict, winners: set) -> bool:
     """Можно ли оставить действующее решение, которого нет в новом ответе AI.
     Нужно, чтобы обе записи были на месте (иначе запись пропала или сменила дату), победитель оставался видимым,
-    не проигрывал другой записи и мог побеждать, а проигравший не стал победителем другой группы, дайджестом или перечнем."""
+    не проигрывал другой записи и мог побеждать (не перечень и не строка дайджеста), а проигравший не стал
+    победителем другой группы или перечнем."""
     if loser is None or winner is None:
         return False
-    if winner.hidden or winner.key in wanted or winner.key in plan.lists or winner.is_list:
+    if winner.hidden or winner.key in wanted or winner.key in plan.lists or winner.is_list or winner.is_digest:
         return False
-    if loser.key in winners or loser.is_digest or loser.is_list or loser.key in plan.lists:
+    if loser.key in winners or loser.is_list or loser.key in plan.lists:
         return False
     return True

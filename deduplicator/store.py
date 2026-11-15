@@ -6,6 +6,7 @@ from datetime import date
 import asyncpg
 from loguru import logger
 
+from db import fav_transfer
 from db.tables import Tables
 from deduplicator.engine import DayPlan, Live
 from deduplicator.records import KIND_EVENT, KIND_MESSAGE, Record
@@ -109,8 +110,10 @@ async def finish_run(pool: asyncpg.Pool, run_id: int, status: str, stats: dict, 
         stats.get('hidden', 0), stats.get('unhidden', 0), (error or '')[:500] or None)
 
 
-async def apply_day(pool: asyncpg.Pool, plan: DayPlan, *, run_id: int | None, fingerprint: str, model: str) -> None:
-    """Одна транзакция на дату: решения, скрытия и отпечаток применяются вместе или не применяются."""
+async def apply_day(pool: asyncpg.Pool, plan: DayPlan, *, run_id: int | None, fingerprint: str, model: str) -> int:
+    """Одна транзакция на дату: решения, скрытия, перенос избранного и отпечаток применяются вместе или не
+    применяются. Возвращает число перенесённых пользовательских ⭐/🙈 (только method ai)."""
+    moved = 0
     async with pool.acquire() as conn:
         async with conn.transaction():
             if plan.method == 'ai':
@@ -129,18 +132,29 @@ async def apply_day(pool: asyncpg.Pool, plan: DayPlan, *, run_id: int | None, fi
                 if plan.stale:
                     await conn.execute(f"UPDATE {Tables.DEDUP_DECISIONS} SET status = 'stale', updated_at = now() "
                                        f"WHERE id = ANY($1::bigint[])", plan.stale)
+                    # проигравший воскресает (или переходит к другому победителю): ⭐ и 🙈 возвращаются на него
+                    await fav_transfer.rollback(conn, plan.stale)
                 for kind, rid in plan.unhide:
                     await conn.execute(f"UPDATE {_table(kind)} SET hidden_by_admin = FALSE "
                                        f"WHERE {_id_col(kind)} = $1 AND hidden_by_admin = TRUE", rid)
+                inserted: list[tuple] = []
                 for nd in plan.insert:
                     await conn.execute(f"DELETE FROM {Tables.DEDUP_DECISIONS} WHERE status = 'proposed' "
                                        f"AND loser_kind = $1 AND loser_id = $2", nd.loser.kind, nd.loser.id)
-                    await conn.execute(
+                    did = await conn.fetchval(
                         f"INSERT INTO {Tables.DEDUP_DECISIONS} (day, winner_kind, winner_id, loser_kind, loser_id, "
-                        f"status, decided_by, model, reason, run_id) VALUES ($1, $2, $3, $4, $5, 'active', 'ai', $6, $7, $8)",
+                        f"status, decided_by, model, reason, run_id) VALUES ($1, $2, $3, $4, $5, 'active', 'ai', $6, $7, $8) "
+                        f"RETURNING id",
                         plan.day, nd.winner.kind, nd.winner.id, nd.loser.kind, nd.loser.id, model, nd.reason, run_id)
+                    inserted.append((did, nd))
                 for kind, rid in plan.hide:
                     await conn.execute(f"UPDATE {_table(kind)} SET hidden_by_admin = TRUE WHERE {_id_col(kind)} = $1", rid)
+                # скрытие уже выполнено (строка проигравшего заблокирована до конца транзакции): новые ⭐ на него
+                # не добавятся, а добавленные раньше переезжают на победителя
+                for did, nd in inserted:
+                    moved += await fav_transfer.transfer(
+                        conn, decision_id=did, day=plan.day,
+                        loser=(nd.loser.kind, nd.loser.id), winner=(nd.winner.kind, nd.winner.id))
             else:
                 for nd in plan.wanted:
                     await conn.execute(
@@ -152,3 +166,4 @@ async def apply_day(pool: asyncpg.Pool, plan: DayPlan, *, run_id: int | None, fi
                 f"INSERT INTO {Tables.DEDUP_DATES} (day, fingerprint, processed_at, run_id) VALUES ($1, $2, now(), $3) "
                 f"ON CONFLICT (day) DO UPDATE SET fingerprint = EXCLUDED.fingerprint, processed_at = now(), run_id = EXCLUDED.run_id",
                 plan.day, fingerprint, run_id)
+    return moved

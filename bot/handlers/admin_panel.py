@@ -55,6 +55,7 @@ async def handle_admin_panel(
         [InlineKeyboardButton('📢 Алерт', callback_data='admin_panel:alert')],
         [InlineKeyboardButton('✏️ Новое сообщение', callback_data='admin_panel:new_event')],
         [InlineKeyboardButton('📤 Выгрузка пересмотров', callback_data='rvx:menu')],
+        [InlineKeyboardButton('⭐ Перенос избранного (CSV)', callback_data='fvx:get')],
         [InlineKeyboardButton('🏠 В меню', callback_data='nav:menu')],
     ])
 

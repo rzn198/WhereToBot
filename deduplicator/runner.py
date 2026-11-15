@@ -22,8 +22,9 @@ from deduplicator.audit import audit_from_cfg
 from deduplicator.engine import DayPlan, Live, candidates, plan_day
 from deduplicator.grouping import (PROMPT_VERSION, SYSTEM_PROMPT, BadGroupingOutput, Groups, build_prompt,
                                    chunk_records, merge_groups, parse_groups, plan_requests)
-from deduplicator.priority import PriorityResolver
-from deduplicator.records import Record, fingerprint
+from db import fav_transfer
+from deduplicator.priority import PriorityResolver, SameSourcePolicy
+from deduplicator.records import Record, configure_list_markers, fingerprint
 from shared.ai import AIClient, AIUnavailable
 
 METHODS = ('legacy', 'shadow', 'ai')
@@ -50,6 +51,8 @@ def ai_settings(cfg: dict) -> dict:
         max_day_requests=int(ai.get('max_requests_per_day', 21)),
         horizon_days=int(ai.get('horizon_days', 365)),
         hide_exact_copies=bool(ai.get('hide_exact_copies', True)),
+        same_source=ai.get('same_source'),                  # None — значения по умолчанию (каналы, polako)
+        list_markers=ai.get('list_markers') or {},
     )
 
 
@@ -63,19 +66,20 @@ def _after_apply(cands: list[Record], plan: DayPlan) -> list[Record]:
             for r in cands]
 
 
-async def _ask_day(client: AIClient, recs: list[Record], resolver: PriorityResolver, s: dict) -> Groups:
+async def _ask_day(client: AIClient, recs: list[Record], resolver: PriorityResolver, s: dict,
+                   policy: SameSourcePolicy | None = None) -> Groups:
     ordered = sorted(recs, key=lambda r: (resolver.label(r), r.id))
     labels = {r.key: resolver.label(r) for r in recs}
     found: list = []
     out = Groups()
     for chunk in plan_requests(ordered, s['max_records'], s['max_day_requests']):
-        prompt, index = build_prompt(chunk, labels, s['max_chars'])
+        prompt, index = build_prompt(chunk, labels, s['max_chars'], policy.allows if policy else None)
         raw = await client.complete(SYSTEM_PROMPT, prompt)
         model = getattr(client, 'current_model', '') or ''     # модель, давшая этот ответ (после возможного отката)
         out.raw.append(raw)
         out.models.append(model)
         try:
-            groups = parse_groups(raw, index)
+            groups = parse_groups(raw, index, policy.allows if policy else None)
         except BadGroupingOutput as e:
             client.report_bad_output()
             logger.warning(f"DEDUP_BAD_OUTPUT | day={recs[0].day} | {e} | raw={raw[:200]!r}")
@@ -89,6 +93,27 @@ async def _ask_day(client: AIClient, recs: list[Record], resolver: PriorityResol
     return out
 
 
+def _needs_ai(cands: list[Record], policy: SameSourcePolicy) -> bool:
+    """Спрашивать ИИ про дату: записей минимум из двух источников либо минимум две записи источника,
+    внутри которого повторы разрешены (каналы, polako)."""
+    per_source = Counter(r.source for r in cands)
+    return len(per_source) >= 2 or any(n >= 2 and policy.allows_source(src) for src, n in per_source.items())
+
+
+async def _fav_housekeeping(pool: asyncpg.Pool, audit, run_id: int | None, st: dict) -> None:
+    """После прогона ai: чистим старые переносы (дата события + 1 месяц) и проверяем FAV_INVARIANT
+    (у скрытого проигравшего не должно остаться избранного; если осталось — переносим на победителя)."""
+    try:
+        await fav_transfer.purge_old(pool)
+        bad = await fav_transfer.heal_invariant(pool)
+        st['fav_invariant_fixed'] = sum(b['users'] for b in bad)
+        for b in bad:
+            audit.log_error('fav_invariant', run_id=run_id, day=b['day'].isoformat(),
+                            error=f"loser={b['loser']} winner={b['winner']} users={b['users']}")
+    except Exception as e:                # самопроверка не должна ронять прогон
+        logger.error(f"DEDUP_FAV_HOUSEKEEPING_ERROR | {type(e).__name__}: {e}")
+
+
 async def run_dedup(pool: asyncpg.Pool, client: AIClient, cfg: dict, *, method: str, dry_run: bool = False,
                     force: bool = False, only_days: list[date] | None = None, start_date: date | None = None,
                     ignore_hidden: bool = False, max_days: int | None = None,
@@ -100,7 +125,8 @@ async def run_dedup(pool: asyncpg.Pool, client: AIClient, cfg: dict, *, method: 
         raise ValueError(f"run_dedup: method должен быть shadow или ai, получено {method!r}")
     s = ai_settings(cfg)
     res = RunResult(stats=dict(dates_total=0, dates_processed=0, requests=0, tokens_in=0, tokens_out=0,
-                               groups_found=0, hidden=0, unhidden=0, sticky=0, bad_days=0, skipped_days=0))
+                               groups_found=0, hidden=0, unhidden=0, sticky=0, bad_days=0, skipped_days=0,
+                               fav_moved=0))
     st = res.stats
     audit = audit_from_cfg(cfg) if not dry_run else audit_from_cfg(None)     # сухой прогон журнал не пишет
     t_start = time.monotonic()
@@ -120,6 +146,8 @@ async def run_dedup(pool: asyncpg.Pool, client: AIClient, cfg: dict, *, method: 
     resolver = PriorityResolver(s['priority'], names)
     resolver.warn_unresolved()
     res.resolver = resolver
+    markers = configure_list_markers(s['list_markers'])
+    policy = SameSourcePolicy(s['same_source'], names)
 
     records = await store.load_records(pool, today, end)
     if ignore_hidden:
@@ -130,7 +158,8 @@ async def run_dedup(pool: asyncpg.Pool, client: AIClient, cfg: dict, *, method: 
     for r in records:
         by_day.setdefault(r.day, []).append(r)
 
-    salt = f"{method}|{PROMPT_VERSION}|{'>'.join(resolver.entries)}|{s['max_chars']}|{s['max_records']}|{int(s['hide_exact_copies'])}"
+    salt = (f"{method}|{PROMPT_VERSION}|{'>'.join(resolver.entries)}|{s['max_chars']}|{s['max_records']}|"
+            f"{int(s['hide_exact_copies'])}|{'+'.join(policy.entries)}|{markers.signature}")
     work: list[tuple[date, list[Record], list[Live], str, bool]] = []
     for day in sorted(set(by_day) | set(live_by_day)):
         if only_days and day not in only_days:
@@ -140,7 +169,7 @@ async def run_dedup(pool: asyncpg.Pool, client: AIClient, cfg: dict, *, method: 
         fp = fingerprint(cands, salt)
         if stored_fp.get(day) == fp:
             continue
-        need_ai = len({r.source for r in cands}) >= 2
+        need_ai = _needs_ai(cands, policy)
         work.append((day, cands, live, fp, need_ai))
     if max_days:
         work = work[:max_days]
@@ -171,7 +200,7 @@ async def run_dedup(pool: asyncpg.Pool, client: AIClient, cfg: dict, *, method: 
                     return None
                 budget['left'] -= n_req
                 try:
-                    return await _ask_day(client, cands, resolver, s)
+                    return await _ask_day(client, cands, resolver, s, policy)
                 except AIUnavailable as e:
                     down['cause'] = str(e)
                     return None
@@ -201,7 +230,7 @@ async def run_dedup(pool: asyncpg.Pool, client: AIClient, cfg: dict, *, method: 
             else:
                 groups = Groups()
                 model = 'rules'                       # только правила движка (копии одного источника), AI не спрашивали
-            plan = plan_day(day, cands, groups, live, resolver, method, s['hide_exact_copies'])
+            plan = plan_day(day, cands, groups, live, resolver, method, s['hide_exact_copies'], policy)
             res.plans.append(plan)
             st['dates_processed'] += 1
             st['groups_found'] += len(groups)
@@ -210,8 +239,9 @@ async def run_dedup(pool: asyncpg.Pool, client: AIClient, cfg: dict, *, method: 
             st['sticky'] += len(plan.sticky)
             if not dry_run:
                 try:
-                    await store.apply_day(pool, plan, run_id=res.run_id, model=model,
-                                          fingerprint=fingerprint(_after_apply(cands, plan), salt))
+                    moved = await store.apply_day(pool, plan, run_id=res.run_id, model=model,
+                                                  fingerprint=fingerprint(_after_apply(cands, plan), salt))
+                    st['fav_moved'] += moved
                     models_used[model] += 1
                     audit.log_day(plan, cands, resolver, run_id=res.run_id, model=model, groups=groups,
                                   asked_ai=need_ai, prev=prev_decisions.get(day))
@@ -224,6 +254,8 @@ async def run_dedup(pool: asyncpg.Pool, client: AIClient, cfg: dict, *, method: 
                     st['sticky'] -= len(plan.sticky)
                     res.plans.pop()
 
+        if not dry_run and method == 'ai':
+            await _fav_housekeeping(pool, audit, res.run_id, st)
     except Exception as e:
         logger.exception(f"DEDUP_RUN_ERROR | {type(e).__name__}: {e}")
         res.status, res.error = 'error', f"{type(e).__name__}: {e}"

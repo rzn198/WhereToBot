@@ -31,14 +31,15 @@ os.environ.setdefault('APP_ENV', 'local')
 
 from db.tables import Tables  # noqa: E402
 from deduplicator import runner  # noqa: E402
-from deduplicator.engine import DayPlan, order_group  # noqa: E402
-from deduplicator.priority import PriorityResolver  # noqa: E402
+from deduplicator.engine import DayPlan, order_group, pairable  # noqa: E402
+from deduplicator.priority import PriorityResolver, SameSourcePolicy  # noqa: E402
 from shared.ai import client_from_config  # noqa: E402
 
 FIELDS = ['day', 'group', 'role', 'kind', 'id', 'source', 'position', 'legacy', 'text', 'reason', 'model']
 
 
-def cluster_rows(plans: list[DayPlan], resolver: PriorityResolver, legacy: dict, model: str) -> list[dict]:
+def cluster_rows(plans: list[DayPlan], resolver: PriorityResolver, legacy: dict, model: str,
+                 policy: SameSourcePolicy | None = None) -> list[dict]:
     """Строки CSV: по одной на запись группы. role: winner | loser | kept (тот же источник) | kept (дайджест)."""
     rows = []
     for plan in plans:
@@ -46,7 +47,7 @@ def cluster_rows(plans: list[DayPlan], resolver: PriorityResolver, legacy: dict,
         for gi, g in enumerate(plan.groups, 1):
             members = sorted(g.members, key=resolver.rank)
             winner, rest = order_group(members, plan.lists, plan.weak, resolver)
-            if winner is None or not any(m.source != winner.source for m in rest):
+            if winner is None or not any(pairable(winner, m, policy) for m in rest):
                 continue
             skipped = [x for x in members if x.key != winner.key and x.key not in {y.key for y in rest}]
             extra = [nd.loser for nd in plan.wanted if nd.winner.key == winner.key
@@ -164,7 +165,8 @@ async def main():
             if res.status != 'ok':
                 print(f"   !!! {model}: {res.status} — {res.error}")
                 continue
-            rows = cluster_rows(res.plans, res.resolver, legacy, model)
+            rows = cluster_rows(res.plans, res.resolver, legacy, model,
+                                SameSourcePolicy((run_cfg.get('ai') or {}).get('same_source'), res.resolver.channel_names))
             path = out_dir / f"dedup_clusters_{re.sub(r'[^A-Za-z0-9._-]', '_', model)}.csv"
             save_csv(path, rows)
             per_model[model] = loser_pairs(res.plans)

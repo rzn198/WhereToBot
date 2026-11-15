@@ -65,6 +65,7 @@ async def load_event_ids(
                 FROM {Tables.EVENTS} e
                 JOIN {Tables.EVENT_FAVORITES} ef ON ef.event_id = e.id
                 WHERE ef.user_id = $1
+                AND e.hidden_by_admin = FALSE
                 AND e.starts_at >= CURRENT_DATE
                 AND e.id NOT IN (
                     SELECT event_id FROM {Tables.EVENT_HIDDEN} WHERE user_id = $1
@@ -126,6 +127,13 @@ async def load_event_ids(
     return _rows_to_refs(rows)
 
 
+async def _winner_ref(pool: asyncpg.Pool, ref: Ref) -> Ref:
+    """Победитель вместо скрытого проигравшего дубля (по действующим решениям дедупликатора) либо сама ссылка."""
+    from db import fav_transfer
+    kind, rid = await fav_transfer.resolve_winner(pool, 'e' if is_event_ref(ref) else 'm', ref_id(ref))
+    return event_ref(rid) if kind == 'e' else rid
+
+
 async def fetch_event_by_id(
     pool: asyncpg.Pool,
     ref: Ref,
@@ -136,7 +144,7 @@ async def fetch_event_by_id(
         row = await pool.fetchrow(f"""
             SELECT
                 e.id, e.title, e.description, e.description_ru, e.starts_at,
-                e.venue, e.city, e.images, e.image_file_id, e.source_url,
+                e.venue, e.city, e.images, e.image_file_id, e.source_url, e.hidden_by_admin,
                 EXISTS(
                     SELECT 1 FROM {Tables.EVENT_FAVORITES}
                     WHERE user_id = $2 AND event_id = e.id
@@ -153,7 +161,7 @@ async def fetch_event_by_id(
     row = await pool.fetchrow(f"""
         SELECT
             m.surrogate_id, m.text, m.entities, m.date,
-            m.photo_file_id, m.storage_message_id,
+            m.photo_file_id, m.storage_message_id, m.hidden_by_admin,
             EXISTS(
                 SELECT 1 FROM {Tables.FAVORITES}
                 WHERE user_id = $2 AND msg_id = m.surrogate_id
@@ -200,6 +208,12 @@ async def show_current_event(
 
     ref = event_ids[current_index]
     event = await fetch_event_by_id(pool, ref, user_id)
+    if event and event.get('hidden_by_admin'):
+        # старый список: карточку скрыл дедупликатор как дубль — показываем победителя (⭐ у пользователя уже на нём)
+        winner = await _winner_ref(pool, ref)
+        if winner != ref:
+            event_ids[current_index] = ref = winner
+            event = await fetch_event_by_id(pool, ref, user_id)
 
     if not event:
         await edit_or_send(

@@ -30,28 +30,88 @@ class Record:
 
     @property
     def is_digest(self) -> bool:
-        """Строка дайджеста (кастомный парсер): целый день со списком событий, скрывать её нельзя."""
+        """Строка дайджеста (кастомный парсер, position > 0): «лёгкая» запись об одном событии. Побеждать не может,
+        проиграть может (другой записи, ИИ-группе или как точная копия — двойник при сдвиге позиций)."""
         return self.kind == KIND_MESSAGE and self.position > 0
 
     @property
     def is_list(self) -> bool:
-        """Цельный пост-перечень событий: не может ни победить, ни быть скрытым (у строки дайджеста
-        position > 0 своя логика — is_digest)."""
+        """Цельный пост-перечень событий (position = 0): не может ни победить, ни быть скрытым."""
         return self.kind == KIND_MESSAGE and self.position == 0 and looks_like_list(self.text)
 
 
-_LIST_HEAD = re.compile(r'дайджест|подборк|афиша (?:мероприятий|недели|на неделю|выходных)|на выходные и на следующую',
-                        re.IGNORECASE)
+# --- определение перечня -------------------------------------------------------------------------------
+# Пост-перечень (дайджест, афиша недели) — это ОДНА запись про много событий: скрыть её из-за одного дубля
+# нельзя. Признаки (ТЗ Denis, ноябрь 2026, проверены на 20 размеченных постах):
+#   * сильное слово в первых STRONG_WINDOW символах — достаточно одного;
+#   * ИЛИ слабое слово в первых WEAK_WINDOW символах И не меньше WEAK_MIN_TIMES времён в тексте.
+# «Много времён без слов» перечнем больше НЕ считается (так терялся French VR с сеансами по часам).
+# Слова и окна можно переопределить в config.yaml: deduplication.ai.list_markers (см. configure_list_markers).
+DEFAULT_STRONG = ('дайджест', r'афиша\s+(?:мероприятий|недели|на\s+неделю|выходных)')
+DEFAULT_WEAK = ('подборк', r'на\s+выходные\s+и\s+на\s+следующую', r'куда\s+пойти', r'анонсы?\s+(?:на\s+)?недел')
+DEFAULT_STRONG_WINDOW = 80
+DEFAULT_WEAK_WINDOW = 200
+DEFAULT_WEAK_MIN_TIMES = 8
+
 _TIME_OR_DATE = re.compile(r'\b\d{1,2}[:.]\d{2}\b')
-LIST_MARKS_THRESHOLD = 8
 
 
-def looks_like_list(text: str) -> bool:
+@dataclass(frozen=True)
+class ListMarkers:
+    strong: re.Pattern
+    weak: re.Pattern
+    strong_window: int = DEFAULT_STRONG_WINDOW
+    weak_window: int = DEFAULT_WEAK_WINDOW
+    weak_min_times: int = DEFAULT_WEAK_MIN_TIMES
+
+    @property
+    def signature(self) -> str:
+        """Для отпечатка настроек: смена маркеров = пересчёт дат."""
+        return f"{self.strong.pattern}|{self.weak.pattern}|{self.strong_window}|{self.weak_window}|{self.weak_min_times}"
+
+
+def _compile(words) -> re.Pattern:
+    return re.compile('|'.join(f'(?:{w})' for w in words), re.IGNORECASE)
+
+
+def build_list_markers(cfg: dict | None = None) -> ListMarkers:
+    """cfg — блок deduplication.ai.list_markers (может быть пустым: тогда значения по умолчанию).
+    Неверное регулярное выражение — ValueError с понятным текстом (сервис не стартует с кривым конфигом)."""
+    cfg = cfg or {}
+    strong = [str(w) for w in (cfg.get('strong') or DEFAULT_STRONG) if str(w).strip()]
+    weak = [str(w) for w in (cfg.get('weak') or DEFAULT_WEAK) if str(w).strip()]
+    try:
+        return ListMarkers(
+            strong=_compile(strong), weak=_compile(weak),
+            strong_window=int(cfg.get('strong_window', DEFAULT_STRONG_WINDOW)),
+            weak_window=int(cfg.get('weak_window', DEFAULT_WEAK_WINDOW)),
+            weak_min_times=int(cfg.get('weak_min_times', DEFAULT_WEAK_MIN_TIMES)))
+    except re.error as e:
+        raise ValueError(f"deduplication.ai.list_markers: неверное выражение: {e}") from e
+
+
+_MARKERS = build_list_markers()
+
+
+def configure_list_markers(cfg: dict | None) -> ListMarkers:
+    """Применить маркеры из конфига (вызывает runner при старте прогона)."""
+    global _MARKERS
+    _MARKERS = build_list_markers(cfg)
+    return _MARKERS
+
+
+def list_markers() -> ListMarkers:
+    return _MARKERS
+
+
+def looks_like_list(text: str, markers: ListMarkers | None = None) -> bool:
     """Пост-перечень многих событий (дайджест, афиша недели, подборка), не разрезанный парсером на строки.
-    Эвристика-страховка независимо от AI: слово «дайджест/подборка/афиша недели» в начале либо много
-    дат и времён в тексте. Ложное срабатывание безопасно: такая запись просто остаётся видимой."""
+    Ложное срабатывание безопасно: такая запись просто остаётся видимой (но и не скрывается как дубль)."""
+    m = markers or _MARKERS
     t = text or ''
-    return bool(_LIST_HEAD.search(t[:200])) or len(_TIME_OR_DATE.findall(t)) >= LIST_MARKS_THRESHOLD
+    if m.strong.search(t[:m.strong_window]):
+        return True
+    return bool(m.weak.search(t[:m.weak_window])) and len(_TIME_OR_DATE.findall(t)) >= m.weak_min_times
 
 
 def norm_text(text: str) -> str:

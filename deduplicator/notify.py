@@ -47,9 +47,10 @@ async def send_document(data: bytes, filename: str, caption: str = '') -> bool:
 
 
 async def send_run_files(pool, res, method: str, send_file=None) -> int:
-    """Два CSV после прогона: изменения прогона и снимок действующих решений. Сбой сборки/отправки не ломает сервис.
+    """CSV после прогона: изменения прогона, снимок действующих решений и (если были) переносы избранного. Сбой сборки/отправки не ломает сервис.
     Возвращает число отправленных файлов."""
     from datetime import date
+    from db import fav_moves_export
     from deduplicator import report_csv
     send_file = send_file or send_document
     stamp = date.today().strftime('%Y%m%d')
@@ -60,6 +61,8 @@ async def send_run_files(pool, res, method: str, send_file=None) -> int:
          f"Дедупликатор, прогон {run}: изменения этого прогона"),
         (f"dedup_current_{stamp}.csv", lambda: report_csv.build_current(pool),
          "Дедупликатор: все действующие решения (сегодня и позже)"),
+        (f"dedup_run{run}_fav_moves_{stamp}.csv", lambda: fav_moves_export.build(pool, res.run_id),
+         f"Дедупликатор, прогон {run}: перенос избранного и скрытий пользователей"),
     ):
         try:
             data = await builder()
@@ -81,16 +84,24 @@ def run_report(res, method: str, resolver: PriorityResolver | None = None) -> st
     plans = res.plans
     resolver = resolver or res.resolver or PriorityResolver()
     changes = st.get('hidden', 0) + st.get('unhidden', 0)
+    if st.get('fav_invariant_fixed'):
+        tail_fix = f"⚠️ FAV_INVARIANT: у скрытых дублей оставалось избранное, перенесено на победителей: {st['fav_invariant_fixed']}"
+    else:
+        tail_fix = None
     proposed = sum(len(p.wanted) for p in plans)
     tail = []
     if st.get('bad_days'):
         tail.append(f"⚠️ плохих ответов ИИ: {st['bad_days']} (эти даты повторятся)")
     if st.get('skipped_days'):
         tail.append(f"⚠️ лимит запросов: пропущено дат {st['skipped_days']} (догоним в следующий раз)")
+    if tail_fix:
+        tail.append(tail_fix)
     if method == 'ai':
         if not changes and not tail:
             return None
         head = f"🧩 Дедупликатор: скрыто {st.get('hidden', 0)}, возвращено {st.get('unhidden', 0)}"
+        if st.get('fav_moved'):
+            head += f", перенесено избранного/скрытий {st['fav_moved']}"
         pairs = [nd for p in plans for nd in p.insert]
     else:
         if not proposed and not tail:

@@ -25,6 +25,7 @@ async def send_push_notifications(bot: Bot, pool) -> None:
             FROM {Tables.FAVORITES} f
             JOIN {Tables.MESSAGES} m ON m.surrogate_id = f.msg_id
             WHERE m.date = $1
+            AND m.hidden_by_admin = FALSE
             AND m.surrogate_id NOT IN (
                 SELECT msg_id FROM {Tables.HIDDEN_EVENTS}
                 WHERE user_id = f.user_id
@@ -36,6 +37,7 @@ async def send_push_notifications(bot: Bot, pool) -> None:
             FROM {Tables.EVENT_FAVORITES} ef
             JOIN {Tables.EVENTS} e ON e.id = ef.event_id
             WHERE e.starts_at = $1
+            AND e.hidden_by_admin = FALSE
             AND e.id NOT IN (
                 SELECT event_id FROM {Tables.EVENT_HIDDEN}
                 WHERE user_id = ef.user_id
