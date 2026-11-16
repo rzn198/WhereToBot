@@ -90,11 +90,15 @@ from bot.handlers.admin_dedup_run import handle_dedup_run
 from bot.handlers.unnamed import handle_unnamed, handle_unnamed_text
 from bot.handlers.categories import (
     handle_categories_menu,
+    handle_calendar_noop,
     handle_category,
     handle_category_calendar,
+    handle_category_calendar_back,
     handle_category_calendar_nav,
     handle_category_day,
+    handle_category_go,
     handle_category_pick,
+    handle_category_reset,
 )
 
 from bot.handlers.cinema import (
@@ -212,6 +216,10 @@ async def main():
     app.add_handler(CallbackQueryHandler(handle_category_calendar, pattern='^catcal:'))
     app.add_handler(CallbackQueryHandler(handle_category_calendar_nav, pattern='^catcal_nav:'))
     app.add_handler(CallbackQueryHandler(handle_category_pick, pattern='^catpick:'))
+    app.add_handler(CallbackQueryHandler(handle_category_go, pattern='^catgo:'))
+    app.add_handler(CallbackQueryHandler(handle_category_reset, pattern='^catrst:'))
+    app.add_handler(CallbackQueryHandler(handle_category_calendar_back, pattern='^catback:'))
+    app.add_handler(CallbackQueryHandler(handle_calendar_noop, pattern='^(catnoop|calendar:ignore)$'))
     app.add_handler(CallbackQueryHandler(handle_review, pattern='^rv:'))
     app.add_handler(CallbackQueryHandler(handle_unnamed, pattern='^un:'))
     app.add_handler(CallbackQueryHandler(handle_review_export, pattern='^rvx:'))

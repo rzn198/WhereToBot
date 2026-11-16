@@ -11,12 +11,14 @@ from loguru import logger
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import ContextTypes
 
-from bot.handlers.calendar import MONTHS_RU, build_calendar
+from bot.handlers.calendar import (
+    MONTHS_RU, build_range_calendar, format_period_ru, plural_events,
+)
 from bot.handlers.events import EVENTS_CITY, show_current_event
 from bot.handlers.reviews import is_admin_user
 from bot.middleware.stats import update_user_stats
 from bot.utils.categories import (
-    MAIN_MENU_CODES, category_dates_sql, counts_sql, get_category, horizon_days, rest_categories,
+    MAIN_MENU_CODES, category_dates_sql, counts_sql, get_category, horizon_days, period_count_sql, rest_categories,
 )
 from bot.utils.messenger import edit_or_send
 
@@ -106,15 +108,14 @@ async def handle_category(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     await _render_window(update, context, code)
 
 
-async def _open_day(update: Update, context: ContextTypes.DEFAULT_TYPE, code: str, day: date) -> bool:
-    """Лента категории на день. False — событий нет (ничего не меняем, окно остаётся)."""
+async def _open_filter(update: Update, context: ContextTypes.DEFAULT_TYPE, filter_name: str) -> bool:
+    """Открыть ленту по фильтру категории. False — событий нет (ничего не меняем, окно остаётся)."""
     from bot.handlers.events import load_event_ids
 
     pool = context.bot_data.get('pool')
     user_id = update.effective_user.id
-    filter_name = f'cat:{code}:date:{day.isoformat()}'
     event_ids = await load_event_ids(pool, user_id, filter_name)
-    logger.info(f"CATEGORY_DAY | user_id={user_id} | code={code} | day={day} | items={len(event_ids)}")
+    logger.info(f"CATEGORY_FEED | user_id={user_id} | filter={filter_name} | items={len(event_ids)}")
     if not event_ids:
         return False
 
@@ -124,6 +125,11 @@ async def _open_day(update: Update, context: ContextTypes.DEFAULT_TYPE, code: st
     context.user_data['expanded'] = False
     await show_current_event(update, context, pool)
     return True
+
+
+async def _open_day(update: Update, context: ContextTypes.DEFAULT_TYPE, code: str, day: date) -> bool:
+    """Лента категории на день."""
+    return await _open_filter(update, context, f'cat:{code}:date:{day.isoformat()}')
 
 
 async def handle_category_day(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -141,48 +147,161 @@ async def handle_category_day(update: Update, context: ContextTypes.DEFAULT_TYPE
     await query.answer()
 
 
-async def handle_category_pick(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """День выбран в календаре категории: catpick:<code>:<ISO>."""
-    query = update.callback_query
-    parts = query.data.split(':')
+def _parse_dates(parts: list[str]) -> list[date] | None:
     try:
-        day = date.fromisoformat(parts[2])
-    except (IndexError, ValueError):
-        await query.answer('Неверная дата', show_alert=True)
-        return
-    if len(parts) != 3 or get_category(parts[1]) is None:
-        await query.answer('Неверный запрос', show_alert=True)
-        return
-    if not await _open_day(update, context, parts[1], day):
-        await query.answer('На этот день событий нет', show_alert=True)
-        return
-    await query.answer()
+        return [date.fromisoformat(x) for x in parts]
+    except ValueError:
+        return None
 
 
-async def _show_category_calendar(update: Update, context: ContextTypes.DEFAULT_TYPE, code: str) -> None:
+async def _count_period(context: ContextTypes.DEFAULT_TYPE, user_id: int, code: str, first: date, last: date) -> int:
+    pool = context.bot_data.get('pool')
+    return await pool.fetchval(
+        period_count_sql(), user_id, EVENTS_CITY, horizon_days(), list(get_category(code).db_values), first, last,
+    ) or 0
+
+
+async def _show_category_calendar(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+    code: str,
+    start: date | None = None,
+    end: date | None = None,
+) -> None:
+    """Календарь категории. start/end — выбранные день или период (None — ничего не выбрано)."""
     pool = context.bot_data.get('pool')
     category = get_category(code)
-    year = context.user_data.get('calendar_year', date.today().year)
-    month = context.user_data.get('calendar_month', date.today().month)
+    user_id = update.effective_user.id
+    if start is not None:
+        year, month = start.year, start.month
+        context.user_data['calendar_year'], context.user_data['calendar_month'] = year, month
+    else:
+        year = context.user_data.get('calendar_year', date.today().year)
+        month = context.user_data.get('calendar_month', date.today().month)
 
     row = await pool.fetchrow(
-        category_dates_sql(), update.effective_user.id, EVENTS_CITY, horizon_days(), list(category.db_values))
-    dates_with_events = set(row['dates'] or [])
+        category_dates_sql(), user_id, EVENTS_CITY, horizon_days(), list(category.db_values))
+    active = set(row['dates'] or [])
     max_date = row['max_date'] if row and row['max_date'] else date.today()
 
-    keyboard = build_calendar(
-        year=year, month=month, dates_with_events=dates_with_events, max_date=max_date,
-        callback_prefix=f'catpick:{code}', nav_prefix=f'catcal_nav:{code}',
+    keyboard = build_range_calendar(
+        year=year, month=month, active=active, max_date=max_date, code=code, start=start, end=end,
     )
+    head = f'📅 {category.emoji} {category.label}\n\n'
+    if start is None:
+        text = f'{head}Выберите дату или начало периода:\n{MONTHS_RU[month]} {year}'
+    else:
+        last = end or start
+        count = await _count_period(context, user_id, code, start, last)
+        what = format_period_ru(start, last)
+        if end is None:
+            hint = 'Выберите конец периода или нажмите «Показать».'
+        else:
+            hint = 'Нажмите «Показать» или выберите другие даты.'
+        text = f'{head}{what}: {plural_events(count)}\n{hint}'
+        keyboard.insert(len(keyboard) - 1, [
+            InlineKeyboardButton(f'Показать {count}', callback_data=f'catgo:{code}:{start.isoformat()}:{last.isoformat()}'),
+            InlineKeyboardButton('Сбросить', callback_data=f'catrst:{code}'),
+        ])
     keyboard.append([InlineKeyboardButton('⬅️ Назад', callback_data=f'cat:{code}')])
 
     await edit_or_send(
         context=context,
         chat_id=update.effective_chat.id,
-        text=f'📅 {category.emoji} {category.label}\n\nВыберите дату:\n{MONTHS_RU[month]} {year}',
+        text=text,
         keyboard=InlineKeyboardMarkup(keyboard),
         parse_mode=None,
     )
+
+
+async def handle_category_pick(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Нажатие на день в календаре категории: catpick:<code>:<ISO> (выбрать начало)
+    или catpick:<code>:<ISO>:<начало> (выбрать конец периода; то же число — открыть ленту этого дня)."""
+    query = update.callback_query
+    parts = query.data.split(':')
+    if len(parts) not in (3, 4) or get_category(parts[1]) is None:
+        await query.answer('Неверный запрос', show_alert=True)
+        return
+    days = _parse_dates(parts[2:])
+    if days is None:
+        await query.answer('Неверная дата', show_alert=True)
+        return
+    code, day = parts[1], days[0]
+    start = days[1] if len(days) == 2 else None
+
+    if start is not None and day == start:
+        if not await _open_day(update, context, code, day):
+            await query.answer('На этот день событий нет', show_alert=True)
+            return
+        await query.answer()
+        return
+
+    if start is not None and (day.year, day.month) == (start.year, start.month):
+        first, last = sorted((start, day))
+        if await _count_period(context, update.effective_user.id, code, first, last) == 0:
+            await query.answer('В этом периоде событий нет', show_alert=True)
+            return
+        await query.answer()
+        await _show_category_calendar(update, context, code, first, last)
+        return
+
+    if await _count_period(context, update.effective_user.id, code, day, day) == 0:
+        await query.answer('На этот день событий нет', show_alert=True)
+        return
+    await query.answer()
+    await _show_category_calendar(update, context, code, day)
+
+
+async def handle_category_go(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """«Показать» под календарём: catgo:<code>:<ISO>:<ISO> (первый и последний день)."""
+    query = update.callback_query
+    parts = query.data.split(':')
+    days = _parse_dates(parts[2:]) if len(parts) == 4 else None
+    if days is None or get_category(parts[1]) is None or days[1] < days[0]:
+        await query.answer('Неверный запрос', show_alert=True)
+        return
+    code, first, last = parts[1], days[0], days[1]
+    if first == last:
+        opened = await _open_day(update, context, code, first)
+    else:
+        opened = await _open_filter(update, context, f'cat:{code}:range:{first.isoformat()}:{last.isoformat()}')
+    if not opened:
+        await query.answer('Событий нет', show_alert=True)
+        return
+    await query.answer()
+
+
+async def handle_category_reset(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """«Сбросить»: catrst:<code> — календарь без выбора в том же месяце."""
+    query = update.callback_query
+    code = query.data.split(':', 1)[1] if ':' in query.data else ''
+    if get_category(code) is None:
+        await query.answer('Неизвестная категория', show_alert=True)
+        return
+    await query.answer()
+    await _show_category_calendar(update, context, code)
+
+
+async def handle_category_calendar_back(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """«К календарю» на карточке: catback:<code>:<ISO>:<ISO> — календарь с тем же периодом (один день — без выбора)."""
+    query = update.callback_query
+    parts = query.data.split(':')
+    days = _parse_dates(parts[2:]) if len(parts) == 4 else None
+    if days is None or get_category(parts[1]) is None or days[1] < days[0]:
+        await query.answer('Неверный запрос', show_alert=True)
+        return
+    await query.answer()
+    code, first, last = parts[1], days[0], days[1]
+    context.user_data['calendar_year'], context.user_data['calendar_month'] = first.year, first.month
+    if first == last or (first.year, first.month) != (last.year, last.month):
+        await _show_category_calendar(update, context, code)
+    else:
+        await _show_category_calendar(update, context, code, first, last)
+
+
+async def handle_calendar_noop(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Неактивные кнопки календаря (дни без событий, заголовок, пустые места): просто подтверждаем нажатие."""
+    await update.callback_query.answer()
 
 
 async def handle_category_calendar(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
