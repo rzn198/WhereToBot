@@ -58,7 +58,7 @@ async def handle_favorites(
             logger.info(
                 f"FAV_ADD | user_id={user_id} | ref={ref}" + (f" | winner={target}" if target != ref else "")
             )
-            await query.answer('⭐ Добавлено в избранное', show_alert=False)
+            await query.answer('⭐ Добавлено в запланированное', show_alert=False)
         except Exception as e:
             logger.error(f"FAV_ADD error: {e}")
             await query.answer('Ошибка. Попробуй ещё раз.', show_alert=True)
@@ -81,7 +81,7 @@ async def handle_favorites(
             logger.info(
                 f"FAV_REMOVE | user_id={user_id} | ref={ref}" + (f" | winner={target}" if target != ref else "")
             )
-            await query.answer('Убрано из избранного', show_alert=False)
+            await query.answer('Убрано из запланированного', show_alert=False)
         except Exception as e:
             logger.error(f"FAV_REMOVE error: {e}")
             await query.answer('Ошибка. Попробуй ещё раз.', show_alert=True)

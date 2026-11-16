@@ -258,7 +258,7 @@ async def test_preview_nearest_day_then_demo_then_nothing(pool):
     assert "ближайший день" in to_user(bot2, ADMIN)[0]["text"] and "Будущий избранный пост" in to_user(bot2, ADMIN)[1]["text"]
 
 
-# ------------------------------------------------------------------ кнопка «⭐ В избранное»: настоящий путь до карточки
+# ------------------------------------------------------------------ кнопка «⭐ В запланированное»: настоящий путь до карточки
 def _button_context(pool, menu_id=800):
     bot = MagicMock()
     bot.delete_message = AsyncMock()
@@ -395,7 +395,7 @@ async def test_card_link_opens_winner_when_post_was_hidden_as_duplicate(pool):
     assert MISSING not in texts(bot)
 
 
-MISSING = "Этого события уже нет в избранном"
+MISSING = "Этого события уже нет в запланированном"
 
 
 async def test_card_link_when_star_removed_shows_notice_then_general_list(pool):
@@ -437,7 +437,7 @@ async def test_plain_start_and_bad_payloads_still_show_main_menu(pool):
         assert "event_ids" not in context.user_data, args
 
 
-async def test_post_card_shows_open_in_channel_button(pool):
+async def test_post_card_has_no_open_in_channel_button(pool):
     from bot.handlers.events import fetch_event_by_id
     from bot.handlers.start import handle_start
     await channel(pool, 111, "clubx")
@@ -451,4 +451,4 @@ async def test_post_card_shows_open_in_channel_button(pool):
     bot, update, context = _start_context(pool, [f"fav_{p_}"])
     await handle_start(update, context)
     buttons = [b for r in bot.send_message.call_args.kwargs["reply_markup"].inline_keyboard for b in r]
-    assert [b.url for b in buttons if b.text == "📎 Открыть в канале"] == ["https://t.me/clubx/55"]
+    assert not [b for b in buttons if "канале" in b.text]

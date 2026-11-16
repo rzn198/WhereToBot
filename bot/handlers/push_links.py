@@ -1,4 +1,4 @@
-"""Переходы из пуша: «⭐ В избранное» и ссылка поста (/start fav_<id>) открывают избранное новым сообщением внизу чата."""
+"""Переходы из пуша: «⭐ В запланированное» и ссылка поста (/start fav_<id>) открывают избранное новым сообщением внизу чата."""
 from loguru import logger
 from telegram import Update
 from telegram.error import TelegramError
@@ -8,7 +8,7 @@ from bot.handlers.events import _winner_ref, load_event_ids, open_filter
 from bot.utils.links import FAV_START_RE
 from db.tables import Tables
 
-MISSING_TEXT = 'Этого события уже нет в избранном'
+MISSING_TEXT = 'Этого события уже нет в запланированном'
 
 
 async def drop_menu(context: ContextTypes.DEFAULT_TYPE, chat_id: int, user_id: int, message_ids) -> None:

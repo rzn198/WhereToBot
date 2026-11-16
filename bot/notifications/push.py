@@ -134,7 +134,7 @@ async def bot_username(bot: Bot) -> str | None:
 
 def keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton('⭐ В избранное', callback_data=OPEN_FAVORITES)],
+        [InlineKeyboardButton('⭐ В запланированное', callback_data=OPEN_FAVORITES)],
         [InlineKeyboardButton('Закрыть', callback_data=CLOSE)],
     ])
 
