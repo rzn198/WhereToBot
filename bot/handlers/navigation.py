@@ -45,23 +45,21 @@ async def handle_navigation(
         await query.answer('Сессия истекла. Выбери фильтр заново.', show_alert=True)
         return
 
-    if data == 'nav:prev':
-        if current_index > 0:
-            await query.answer()
-            context.user_data['current_index'] = current_index - 1
-            context.user_data['expanded'] = False
-        else:
-            await query.answer('Это первое событие', show_alert=False)
+    if data in ('nav:prev', 'nav:next'):
+        total = len(event_ids)
+        if total == 1:
+            await query.answer('Это единственное событие', show_alert=False)
             return
-
-    elif data == 'nav:next':
-        if current_index < len(event_ids) - 1:
-            await query.answer()
-            context.user_data['current_index'] = current_index + 1
-            context.user_data['expanded'] = False
+        # по кругу: «назад» с первой карточки открывает последнюю, «вперёд» с последней — первую
+        if data == 'nav:prev':
+            wrapped = current_index <= 0
+            new_index = total - 1 if wrapped else current_index - 1
         else:
-            await query.answer('Это последнее событие', show_alert=False)
-            return
+            wrapped = current_index >= total - 1
+            new_index = 0 if wrapped else current_index + 1
+        await query.answer(('🔁 К концу списка' if data == 'nav:prev' else '🔁 К началу списка') if wrapped else None, show_alert=False)
+        context.user_data['current_index'] = new_index
+        context.user_data['expanded'] = False
 
     else:
         await query.answer()

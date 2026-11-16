@@ -219,7 +219,7 @@ async def main():
     app.add_handler(CallbackQueryHandler(handle_category_go, pattern='^catgo:'))
     app.add_handler(CallbackQueryHandler(handle_category_reset, pattern='^catrst:'))
     app.add_handler(CallbackQueryHandler(handle_category_calendar_back, pattern='^catback:'))
-    app.add_handler(CallbackQueryHandler(handle_calendar_noop, pattern='^(catnoop|calendar:ignore)$'))
+    app.add_handler(CallbackQueryHandler(handle_calendar_noop, pattern='^(catnoop(:prev|:next)?|calendar:ignore)$'))
     app.add_handler(CallbackQueryHandler(handle_review, pattern='^rv:'))
     app.add_handler(CallbackQueryHandler(handle_unnamed, pattern='^un:'))
     app.add_handler(CallbackQueryHandler(handle_review_export, pattern='^rvx:'))

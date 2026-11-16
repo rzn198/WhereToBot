@@ -6,7 +6,7 @@ import pytest
 
 from bot.handlers import categories as cats
 from bot.handlers.calendar import (
-    build_range_calendar, format_day_ru, format_period_ru, plural_events,
+    MONTHS_RU, build_range_calendar, format_day_ru, format_period_ru, plural_events,
 )
 from bot.handlers.events import _calendar_back_data, load_event_ids
 from bot.keyboards.event_nav import get_event_nav_keyboard
@@ -65,8 +65,8 @@ def test_nothing_selected_active_days_start_selection_and_arrows_work():
     btn = day_buttons(rows)[str(TODAY.day)]
     assert btn.callback_data == f'catpick:concerts:{TODAY.isoformat()}'
     assert getattr(btn, 'style', None) is None
-    assert any(b.callback_data == 'catcal_nav:concerts:next' for b in flat(rows))
-
+    assert [b.text for b in rows[0]][1] == f'{MONTHS_RU[m]} {y}' and [b.text for b in rows[0]][::2] == ['◀️', '▶️']
+    assert rows[0][0].callback_data == 'catnoop:prev' and rows[0][2].callback_data == 'catnoop:next'   # месяц один: подсказка
 
 def test_start_selected_days_carry_start_blue_start_and_arrows_off():
     y, m = _month(TODAY)
@@ -81,6 +81,15 @@ def test_start_selected_days_carry_start_blue_start_and_arrows_off():
         assert end.callback_data == f'catpick:concerts:{TODAY.replace(day=last_day).isoformat()}:{TODAY.isoformat()}'
         assert getattr(end, 'style', None) is None
     assert not any(b.callback_data.startswith('catcal_nav:') for b in flat(rows))
+    assert len(rows) == 2 + len(__import__('calendar').monthcalendar(y, m))      # название месяца, дни недели, недели; стрелок нет
+    assert [b.text for b in rows[0]] == [f'{MONTHS_RU[m]} {y}']
+
+
+def test_selection_has_no_blank_button_row_at_the_bottom():
+    y, m = _month(TODAY)
+    for st, en in ((TODAY, None), (TODAY, TODAY)):
+        rows = build_range_calendar(y, m, {TODAY}, TODAY + timedelta(days=3), 'concerts', start=st, end=en)
+        assert not [b for b in rows[-1] if not b.text.strip()] or len(rows[-1]) == 7   # последний ряд — неделя, не пара пустых
 
 
 def test_period_days_blue_including_days_without_events_and_inert():
@@ -254,7 +263,8 @@ def test_card_keyboard_with_calendar_back_has_calendar_category_and_menu():
     assert rows[-1] == [('🏠 В меню', 'nav:menu')]
 
 
-async def test_noop_button_just_answers():
-    upd, ctx, q = make_update('catnoop')
-    await cats.handle_calendar_noop(upd, ctx)
-    q.answer.assert_awaited_once()
+async def test_noop_buttons_answer_with_hint_on_arrows():
+    for data, hint in (('catnoop', None), ('catnoop:prev', 'Других месяцев нет'), ('catnoop:next', 'Других месяцев нет')):
+        upd, ctx, q = make_update(data)
+        await cats.handle_calendar_noop(upd, ctx)
+        q.answer.assert_awaited_once_with(hint)
