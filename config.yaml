@@ -41,7 +41,7 @@ ui:
   cinema_menu_photo_file_id: "AgACAgIAAxkBAAEpzcJqGW98fiwpQcCwDjwWnuO9ncf-cgACnxprGwM-yEg0mA17sy6jJwEAAwIAA3MAAzsE"
 
 push:
-  mode: shadow          # off — пушей нет | shadow — только лог и сводка админу, пользователям ничего | on — рассылка
+  mode: on          # off — пушей нет | shadow — только лог и сводка админу, пользователям ничего | on — рассылка
   time: "09:00"         # время рассылки (Белград)
   catchup_until: "20:00" # если бот лежал в 09:00, при старте досылает до этого часа (Белград)
   max_chars: 200        # сколько символов поста показывать в строке пуша
@@ -76,7 +76,7 @@ channels:
       parser: "running_beg"
 
 translation:
-  method: off
+  method: on
   sources:                    # значения events.source; пусто = ничего не переводим
     - efinityrs
     - biletrs
