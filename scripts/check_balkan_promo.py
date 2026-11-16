@@ -22,7 +22,7 @@
         (прод по SSH-туннелю или запуск на сервере: docker compose exec event_collector python scripts/check_balkan_promo.py --db).
 
 Ключи (как в остальных скриптах, .env.local при APP_ENV=local или переменные окружения):
-  категории — OPENCODE_EVENTS_API_KEY или OPENCODE_PARSING_API_KEY; перевод — OPENCODE_API_KEY;
+  категории — OPENCODE_EVENTS_API_KEY или OPENCODE_PARSING_API_KEY; перевод — OPENCODE_TRANSLATE_API_KEY;
   дедуп — OPENCODE_DEDUP_API_KEY. --use-parsing-key подставляет ключ парсинга туда, где своего нет.
 Билетные ссылки содержат токены виджетов: в консоли и CSV токены скрыты; home.html хранится как отдал сайт.
 
@@ -541,12 +541,10 @@ async def ai_translation(rep: Report, items: list, args) -> None:
         rep.info("нет описаний для проверки")
         return
     russian = [i for i in todo if is_russian(i.description)]
-    rep.info(f"описаний {len(todo)}: уже на русском (модель не нужна, только ссылка на билеты) — {len(russian)}, к переводу — {len(todo) - len(russian)}")
-    for i in russian[:3]:
-        rep.info(f"  русское: {i.title[:30]!r}: {build_description_ru(i.description, i.source_url, st.max_chars)[:140]!r}…")
+    rep.info(f"описаний {len(todo)}: уже на русском (не переводятся, description_ru не пишется, бот покажет оригинал) — {len(russian)}, к переводу — {len(todo) - len(russian)}")
     foreign = [i for i in todo if i not in russian]
     if not foreign:
-        rep.ok("все описания русские: переводчик для balkan-promo сейчас ничего не делает")
+        rep.ok("все описания русские: переводчик для balkan-promo ничего не делает")
         return
     tcfg['api_key'] = pick_key(tcfg.get('api_key'), args, config)
     if args.models:
@@ -554,7 +552,7 @@ async def ai_translation(rep: Report, items: list, args) -> None:
     if args.ai_base_url:
         tcfg['base_url'] = args.ai_base_url
     if not tcfg['api_key'] or not tcfg.get('models'):
-        rep.warn("нет OPENCODE_API_KEY или translation.models: перевод не проверен")
+        rep.warn("нет OPENCODE_TRANSLATE_API_KEY или translation.models: перевод не проверен")
         return
     client = client_from_config('check-balkan-translate', tcfg)
     client.begin_run()
