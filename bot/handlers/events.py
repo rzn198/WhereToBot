@@ -91,6 +91,17 @@ async def load_event_ids(
             rows = await pool.fetch(
                 feed_sql(day=True), user_id, EVENTS_CITY, horizon_days(), list(category.db_values), day
             )
+        elif rest.startswith('range:'):
+            # 'cat:<code>:range:<ISO>:<ISO>' — категория за период (включительно, не длиннее месяца)
+            try:
+                first, last = (date.fromisoformat(x) for x in rest[6:].split(':'))
+            except ValueError:
+                return []
+            if last < first or (last - first).days > 30:
+                return []
+            rows = await pool.fetch(
+                feed_sql(period=True), user_id, EVENTS_CITY, horizon_days(), list(category.db_values), first, last
+            )
         else:
             rows = await pool.fetch(
                 feed_sql(), user_id, EVENTS_CITY, horizon_days(), list(category.db_values)
@@ -189,6 +200,18 @@ async def fetch_event_by_id(
     return result
 
 
+def _calendar_back_data(current_filter: str) -> str | None:
+    """Кнопка «К календарю» у карточек из ленты за день или период категории: catback:<code>:<ISO>:<ISO>."""
+    if not current_filter.startswith('cat:'):
+        return None
+    code, _, rest = current_filter[4:].partition(':')
+    if rest.startswith('date:'):
+        return f'catback:{code}:{rest[5:]}:{rest[5:]}'
+    if rest.startswith('range:'):
+        return f'catback:{code}:{rest[6:]}'
+    return None
+
+
 async def show_current_event(
     update: Update,
     context: ContextTypes.DEFAULT_TYPE,
@@ -234,6 +257,7 @@ async def show_current_event(
     # внутри ленты категории на карточке есть кнопка «К категории»
     current_filter = str(context.user_data.get('current_filter', ''))
     category_code = current_filter[4:].split(':', 1)[0] if current_filter.startswith('cat:') else None
+    calendar_back = _calendar_back_data(current_filter)
     is_admin = user_id == config['telegram']['admin_user_id']
     under_review = reviewed = False
     if is_admin:
@@ -250,6 +274,7 @@ async def show_current_event(
             is_favorite=fav,
             is_preview=card.is_preview,
             category_code=category_code,
+            calendar_back=calendar_back,
             event_date=event.get('starts_at'),
             is_admin=is_admin,
             under_review=under_review,
@@ -313,6 +338,7 @@ async def show_current_event(
         is_favorite=fav,
         is_preview=is_preview,
         category_code=category_code,
+        calendar_back=calendar_back,
         event_date=event.get('date'),
         is_admin=is_admin,
         under_review=under_review,

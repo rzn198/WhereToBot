@@ -86,10 +86,15 @@ def rest_categories() -> tuple[Category, ...]:
     return tuple(c for c in CATEGORIES if c.code not in MAIN_MENU_CODES)
 
 
-def feed_sql(day: bool = False) -> str:
-    """Лента категории; $4 — массив названий категории. С day=True ещё и $5 — один день (date)."""
-    m_day = "AND date = $5::date" if day else ""
-    e_day = "AND starts_at = $5::date" if day else ""
+def feed_sql(day: bool = False, period: bool = False) -> str:
+    """Лента категории; $4 — массив названий категории. С day=True ещё и $5 — один день (date);
+    с period=True — $5 и $6: первый и последний день периода включительно."""
+    m_day = e_day = ""
+    if day:
+        m_day, e_day = "AND date = $5::date", "AND starts_at = $5::date"
+    elif period:
+        m_day = "AND date BETWEEN $5::date AND $6::date"
+        e_day = "AND starts_at BETWEEN $5::date AND $6::date"
     return f"""
         SELECT kind, id FROM (
             SELECT 0 AS ord, 'm' AS kind, surrogate_id AS id,
@@ -115,6 +120,20 @@ def category_dates_sql() -> str:
             SELECT starts_at FROM {Tables.EVENTS}
             WHERE {EVENTS_FUTURE} AND event_types && $4::text[]
         ) t
+    """
+
+
+def period_count_sql() -> str:
+    """Сколько элементов ленты у категории за период: те же условия, что у feed_sql(period=True).
+    $4 — массив названий категории, $5 и $6 — первый и последний день включительно."""
+    return f"""
+        SELECT (
+            SELECT count(*) FROM {Tables.MESSAGES}
+            WHERE {MESSAGES_FUTURE} AND event_types && $4::text[] AND date BETWEEN $5::date AND $6::date
+        ) + (
+            SELECT count(*) FROM {Tables.EVENTS}
+            WHERE {EVENTS_FUTURE} AND event_types && $4::text[] AND starts_at BETWEEN $5::date AND $6::date
+        ) AS n
     """
 
 

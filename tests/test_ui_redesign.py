@@ -173,8 +173,16 @@ async def test_day_button_opens_feed_for_that_day():
     show.assert_awaited_once()
 
 
-async def test_pick_from_calendar_opens_same_category_on_chosen_day():
+async def test_pick_from_calendar_selects_start_day():
     upd, ctx, q = make_update('catpick:concerts:2026-12-05')
+    with patch.object(cats, '_count_period', AsyncMock(return_value=3)), \
+         patch.object(cats, '_show_category_calendar', AsyncMock()) as show:
+        await cats.handle_category_pick(upd, ctx)
+    show.assert_awaited_once_with(upd, ctx, 'concerts', date(2026, 12, 5))
+
+
+async def test_pick_same_day_again_opens_that_day_in_same_category():
+    upd, ctx, q = make_update('catpick:concerts:2026-12-05:2026-12-05')
     seen = {}
 
     async def fake_load(pool, user_id, name):
