@@ -12,7 +12,7 @@ from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import ContextTypes
 
 from bot.handlers.calendar import (
-    MONTHS_RU, build_range_calendar, format_period_ru, plural_events,
+    MONTHS_RU, build_range_calendar, format_period_ru, parse_nav_target, plural_events,
 )
 from bot.handlers.events import EVENTS_CITY, show_current_event
 from bot.handlers.reviews import is_admin_user
@@ -189,7 +189,7 @@ async def _show_category_calendar(
     )
     head = f'📅 {category.emoji} {category.label}\n\n'
     if start is None:
-        text = f'{head}Выберите дату или начало периода:\n{MONTHS_RU[month]} {year}'
+        text = f'{head}Выберите дату или начало периода:'
     else:
         last = end or start
         count = await _count_period(context, user_id, code, start, last)
@@ -199,7 +199,7 @@ async def _show_category_calendar(
         else:
             hint = 'Нажмите «Показать» или выберите другие даты.'
         text = f'{head}{what}: {plural_events(count)}\n{hint}'
-        keyboard.insert(len(keyboard) - 1, [
+        keyboard.append([
             InlineKeyboardButton(f'Показать {count}', callback_data=f'catgo:{code}:{start.isoformat()}:{last.isoformat()}'),
             InlineKeyboardButton('Сбросить', callback_data=f'catrst:{code}'),
         ])
@@ -300,8 +300,10 @@ async def handle_category_calendar_back(update: Update, context: ContextTypes.DE
 
 
 async def handle_calendar_noop(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Неактивные кнопки календаря (дни без событий, заголовок, пустые места): просто подтверждаем нажатие."""
-    await update.callback_query.answer()
+    """Неактивные кнопки календаря (дни без событий, заголовок, пустые места): подтверждаем нажатие.
+    catnoop:prev / catnoop:next — стрелка на границе, показываем подсказку."""
+    hints = {'catnoop:prev': 'Других месяцев нет', 'catnoop:next': 'Других месяцев нет'}
+    await update.callback_query.answer(hints.get(update.callback_query.data))
 
 
 async def handle_category_calendar(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -319,20 +321,17 @@ async def handle_category_calendar(update: Update, context: ContextTypes.DEFAULT
 
 
 async def handle_category_calendar_nav(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Листание месяцев: catcal_nav:<code>:prev|next."""
+    """Листание месяцев по кругу: catcal_nav:<code>:<ГГГГ-ММ>[:wp|wn] (прежние prev|next тоже понимаем)."""
     query = update.callback_query
     parts = query.data.split(':')
-    if len(parts) != 3 or get_category(parts[1]) is None or parts[2] not in ('prev', 'next'):
-        await query.answer('Неверный запрос', show_alert=True)
-        return
-    await query.answer()
     year = context.user_data.get('calendar_year', date.today().year)
     month = context.user_data.get('calendar_month', date.today().month)
-    month += -1 if parts[2] == 'prev' else 1
-    if month < 1:
-        month, year = 12, year - 1
-    elif month > 12:
-        month, year = 1, year + 1
+    target = parse_nav_target(parts[2:], year, month) if len(parts) >= 3 else None
+    if target is None or get_category(parts[1]) is None:
+        await query.answer('Неверный запрос', show_alert=True)
+        return
+    year, month, toast = target
+    await query.answer(toast)
     context.user_data['calendar_year'] = year
     context.user_data['calendar_month'] = month
     await _show_category_calendar(update, context, parts[1])

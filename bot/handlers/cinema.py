@@ -185,7 +185,7 @@ async def _show_cinema_movie(
         text += f"\n\n{description}"
 
     nav_row = [
-        InlineKeyboardButton(f'◀️ {idx}/{total}', callback_data='cinema:prev'),
+        InlineKeyboardButton(f'◀️ {idx if idx > 0 else total}/{total}', callback_data='cinema:prev'),
         InlineKeyboardButton(f'{idx+1}/{total} ▶️', callback_data='cinema:next'),
     ]
 
@@ -259,24 +259,24 @@ async def handle_cinema_nav(
     context: ContextTypes.DEFAULT_TYPE,
 ) -> None:
     query = update.callback_query
-    await query.answer()
 
     movies = context.user_data.get('cinema_movies', [])
     idx = context.user_data.get('cinema_index', 0)
     direction = query.data.split(':')[1]
 
+    if direction not in ('prev', 'next') or len(movies) < 2:
+        await query.answer('🎬 Это единственный фильм' if direction in ('prev', 'next') and movies else None)
+        return
+
+    # по кругу: «назад» с первого фильма открывает последний, «вперёд» с последнего — первый
     if direction == 'prev':
-        if idx > 0:
-            context.user_data['cinema_index'] = idx - 1
-        else:
-            await query.answer('🎬 Это первый фильм', show_alert=False)
-            return
-    elif direction == 'next':
-        if idx < len(movies) - 1:
-            context.user_data['cinema_index'] = idx + 1
-        else:
-            await query.answer('🎬 Больше фильмов нет', show_alert=False)
-            return
+        wrapped = idx <= 0
+        idx = len(movies) - 1 if wrapped else idx - 1
+    else:
+        wrapped = idx >= len(movies) - 1
+        idx = 0 if wrapped else idx + 1
+    await query.answer(('🔁 К последнему фильму' if direction == 'prev' else '🔁 К первому фильму') if wrapped else None)
+    context.user_data['cinema_index'] = idx
 
     await _show_cinema_movie(update, context)
 
@@ -435,25 +435,19 @@ async def handle_cinema_calendar_nav(
     update: Update,
     context: ContextTypes.DEFAULT_TYPE,
 ) -> None:
+    from bot.handlers.calendar import parse_nav_target
+
     query = update.callback_query
-    await query.answer()
 
     pool = context.bot_data.get('pool')
-    direction = query.data.split(':')[1]
-
     year = context.user_data.get('cinema_calendar_year', date.today().year)
     month = context.user_data.get('cinema_calendar_month', date.today().month)
-
-    if direction == 'prev':
-        month -= 1
-        if month < 1:
-            month = 12
-            year -= 1
-    elif direction == 'next':
-        month += 1
-        if month > 12:
-            month = 1
-            year += 1
+    target = parse_nav_target(query.data.split(':')[1:], year, month)
+    if target is None:
+        await query.answer()
+        return
+    year, month, toast = target
+    await query.answer(toast)
 
     context.user_data['cinema_calendar_year'] = year
     context.user_data['cinema_calendar_month'] = month
@@ -497,6 +491,6 @@ async def _show_cinema_calendar(
     await edit_or_send(
         context=context,
         chat_id=chat_id,
-        text=f"📅 *Киноафиша — выберите дату:*\n\n{MONTHS_RU[month]} {year}",
+        text="📅 *Киноафиша — выберите дату:*",
         keyboard=InlineKeyboardMarkup(keyboard),
     )

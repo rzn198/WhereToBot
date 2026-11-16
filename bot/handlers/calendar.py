@@ -13,6 +13,73 @@ MONTHS_RU = [
 ]
 
 
+NOOP = 'catnoop'
+WRAP_TOASTS = {'wp': '🔁 К самому дальнему месяцу', 'wn': '🔁 К ближайшему месяцу'}
+
+
+def month_carousel(year: int, month: int, dates, max_date: date) -> dict:
+    """Соседние месяцы по кругу, только месяцы, где есть дни с событиями (от сегодня до max_date).
+
+    Возвращает {'prev': ((год, месяц), замыкание?), 'next': (...)}; None — других месяцев нет (стрелка с подсказкой).
+    «Назад» из самого раннего месяца открывает самый дальний, «вперёд» из самого дальнего — самый ранний.
+    """
+    today = date.today()
+    months = sorted({(d.year, d.month) for d in dates if today <= d <= max_date})
+    cur = (year, month)
+    if not months:
+        months = [(today.year, today.month)]
+    before = [m for m in months if m < cur]
+    after = [m for m in months if m > cur]
+    prev = (before[-1], False) if before else (months[-1], True)
+    nxt = (after[0], False) if after else (months[0], True)
+    return {
+        'prev': None if prev[0] == cur else prev,
+        'next': None if nxt[0] == cur else nxt,
+    }
+
+
+def _nav_data(prefix: str, step, direction: str) -> str:
+    if step is None:
+        return f'{NOOP}:{direction}'
+    (y, m), wrapped = step
+    return f'{prefix}:{y}-{m:02d}' + (f":{'wp' if direction == 'prev' else 'wn'}" if wrapped else '')
+
+
+def month_header(year: int, month: int, dates, max_date: date, nav_prefix: str, with_arrows: bool = True) -> list:
+    """Шапка календаря: «◀️ Месяц год ▶️» (стрелки по кругу) или одно название месяца."""
+    title = InlineKeyboardButton(f'{MONTHS_RU[month]} {year}', callback_data=NOOP)
+    if not with_arrows:
+        return [title]
+    car = month_carousel(year, month, dates, max_date)
+    return [
+        InlineKeyboardButton('◀️', callback_data=_nav_data(nav_prefix, car['prev'], 'prev')),
+        title,
+        InlineKeyboardButton('▶️', callback_data=_nav_data(nav_prefix, car['next'], 'next')),
+    ]
+
+
+def parse_nav_target(parts: list, year: int, month: int):
+    """Нажатие стрелки месяца: parts — то, что после префикса. 'YYYY-MM[:wp|wn]' или прежние 'prev'/'next'.
+    Возвращает (год, месяц, подсказка или None); None — не разобрали."""
+    if not parts:
+        return None
+    token = parts[0]
+    toast = WRAP_TOASTS.get(parts[1]) if len(parts) > 1 else None
+    if token in ('prev', 'next'):
+        month += -1 if token == 'prev' else 1
+        if month < 1:
+            month, year = 12, year - 1
+        elif month > 12:
+            month, year = 1, year + 1
+        return year, month, None
+    try:
+        y, m = (int(x) for x in token.split('-'))
+        date(y, m, 1)
+    except ValueError:
+        return None
+    return y, m, toast
+
+
 def build_calendar(
     year: int,
     month: int,
@@ -21,53 +88,24 @@ def build_calendar(
     callback_prefix: str,
     nav_prefix: str,
 ) -> list:
-
+    """Календарь месяца: шапка «◀️ Месяц год ▶️» (стрелки по кругу), дни недели, недели."""
     today = date.today()
-    cal = calendar.monthcalendar(year, month)
-
-    header = [InlineKeyboardButton(d, callback_data='calendar:ignore')
-              for d in ['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс']]
-
-    rows = [header]
-
-    for week in cal:
+    rows = [
+        month_header(year, month, dates_with_events, max_date, nav_prefix),
+        [InlineKeyboardButton(d, callback_data=NOOP) for d in ['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс']],
+    ]
+    for week in calendar.monthcalendar(year, month):
         row = []
         for day in week:
             if day == 0:
-                row.append(InlineKeyboardButton(' ', callback_data='calendar:ignore'))
+                row.append(InlineKeyboardButton(' ', callback_data=NOOP))
                 continue
-
             current_date = date(year, month, day)
-
-            if current_date < today or current_date > max_date:
-                row.append(InlineKeyboardButton('·', callback_data='calendar:ignore'))
-            elif current_date in dates_with_events:
-                date_str = current_date.isoformat()
-                row.append(InlineKeyboardButton(
-                    str(day),
-                    callback_data=f'{callback_prefix}:{date_str}'
-                ))
+            if current_date < today or current_date > max_date or current_date not in dates_with_events:
+                row.append(InlineKeyboardButton('·', callback_data=NOOP))
             else:
-                row.append(InlineKeyboardButton('·', callback_data='calendar:ignore'))
-
+                row.append(InlineKeyboardButton(str(day), callback_data=f'{callback_prefix}:{current_date.isoformat()}'))
         rows.append(row)
-
-    current_month = date.today()
-    prev_disabled = (year == current_month.year and month == current_month.month)
-    next_disabled = (year == max_date.year and month == max_date.month)
-
-    nav = [
-        InlineKeyboardButton(
-            '◀️' if not prev_disabled else ' ',
-            callback_data=f'{nav_prefix}:prev' if not prev_disabled else 'calendar:ignore'
-        ),
-        InlineKeyboardButton(
-            '▶️' if not next_disabled else ' ',
-            callback_data=f'{nav_prefix}:next' if not next_disabled else 'calendar:ignore'
-        ),
-    ]
-    rows.append(nav)
-
     return rows
 
 
@@ -75,8 +113,6 @@ MONTHS_GEN = [
     '', 'января', 'февраля', 'марта', 'апреля', 'мая', 'июня',
     'июля', 'августа', 'сентября', 'октября', 'ноября', 'декабря'
 ]
-
-NOOP = 'catnoop'
 
 
 def format_day_ru(day: date) -> str:
@@ -117,18 +153,19 @@ def build_range_calendar(
 
     Состояния:
       start=None            — ничего не выбрано; нажатие на активный день: catpick:<code>:<ISO> (выбрать начало);
-                              стрелки листают месяцы.
+                              в шапке «◀️ Месяц год ▶️»; на границе стрелка показывает подсказку (catnoop:prev|next).
       start задан, end=None — выбрано начало: активные дни несут начало (catpick:<code>:<ISO>:<начало>), повторное
-                              нажатие на то же число открывает ленту этого дня; стрелки неактивны.
+                              нажатие на то же число открывает ленту этого дня; в шапке только название месяца.
       start и end           — выбран период: дни периода синие (в том числе дни без событий внутри него), нажатие
-                              на активный день начинает выбор заново; стрелки неактивны.
+                              на активный день начинает выбор заново; в шапке только название месяца.
     Всё нужное для обработки лежит в callback_data кнопки, состояние бота не хранится (переживает перезапуск).
     """
     today = date.today()
     lo = start
     hi = end or start
     selecting = start is not None
-    rows = [[InlineKeyboardButton(d, callback_data=NOOP) for d in ['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс']]]
+    rows = [month_header(year, month, active, max_date, f'catcal_nav:{code}', with_arrows=not selecting)]
+    rows.append([InlineKeyboardButton(d, callback_data=NOOP) for d in ['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс']])
 
     for week in calendar.monthcalendar(year, month):
         row = []
@@ -151,12 +188,6 @@ def build_range_calendar(
                 row.append(InlineKeyboardButton('·', callback_data=NOOP))
         rows.append(row)
 
-    prev_disabled = selecting or (year, month) <= (today.year, today.month)
-    next_disabled = selecting or (year, month) >= (max_date.year, max_date.month)
-    rows.append([
-        InlineKeyboardButton(' ' if prev_disabled else '◀️', callback_data=NOOP if prev_disabled else f'catcal_nav:{code}:prev'),
-        InlineKeyboardButton(' ' if next_disabled else '▶️', callback_data=NOOP if next_disabled else f'catcal_nav:{code}:next'),
-    ])
     return rows
 
 
@@ -180,25 +211,16 @@ async def handle_calendar_nav(
     context: ContextTypes.DEFAULT_TYPE,
 ) -> None:
     query = update.callback_query
-    await query.answer()
 
     pool = context.bot_data.get('pool')
-    parts = query.data.split(':')
-    direction = parts[1]
-
     year = context.user_data.get('calendar_year', date.today().year)
     month = context.user_data.get('calendar_month', date.today().month)
-
-    if direction == 'prev':
-        month -= 1
-        if month < 1:
-            month = 12
-            year -= 1
-    elif direction == 'next':
-        month += 1
-        if month > 12:
-            month = 1
-            year += 1
+    target = parse_nav_target(query.data.split(':')[1:], year, month)
+    if target is None:
+        await query.answer('Неверный запрос', show_alert=True)
+        return
+    year, month, toast = target
+    await query.answer(toast)
 
     context.user_data['calendar_year'] = year
     context.user_data['calendar_month'] = month

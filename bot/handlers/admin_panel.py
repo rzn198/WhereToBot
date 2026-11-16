@@ -17,7 +17,7 @@ from shared.constants import (
     EVENT_LIST_PREVIEW_LENGTH,
 )
 from bot.handlers.contact import _require_admin, _edit_contact_window, escape_md
-from bot.handlers.calendar import build_calendar, MONTHS_RU
+from bot.handlers.calendar import build_calendar, MONTHS_RU, parse_nav_target
 from bot.handlers.events import EVENTS_CITY
 from db.dedup_admin import (
     decision_for_loser, dependents_count, hide_record, make_ref, parse_ref, record_info, show_record,
@@ -273,7 +273,7 @@ async def _show_admin_hidden_calendar(
         context=context,
         chat_id=chat_id,
         menu_message_id=menu_message_id,
-        text=f"👁 *Скрытые события — выберите дату:*\n\n{MONTHS_RU[month]} {year}",
+        text="👁 *Скрытые события — выберите дату:*",
         keyboard=InlineKeyboardMarkup(keyboard),
     )
 
@@ -283,27 +283,19 @@ async def handle_admin_hidden_nav(
     context: ContextTypes.DEFAULT_TYPE,
 ) -> None:
     query = update.callback_query
-    await query.answer()
+
+    parts = query.data.split(':')
+    year = context.user_data.get('admin_hidden_year', date.today().year)
+    month = context.user_data.get('admin_hidden_month', date.today().month)
+    target = parse_nav_target(parts[1:], year, month)
+    if target is None:
+        await query.answer()
+        return
+    year, month, toast = target
+    await query.answer(toast)
 
     if not await _require_admin(update):
         return
-
-    parts = query.data.split(':')
-    direction = parts[1]
-
-    year = context.user_data.get('admin_hidden_year', date.today().year)
-    month = context.user_data.get('admin_hidden_month', date.today().month)
-
-    if direction == 'prev':
-        month -= 1
-        if month < 1:
-            month = 12
-            year -= 1
-    elif direction == 'next':
-        month += 1
-        if month > 12:
-            month = 1
-            year += 1
 
     context.user_data['admin_hidden_year'] = year
     context.user_data['admin_hidden_month'] = month
@@ -440,9 +432,9 @@ async def handle_admin_hidden_event_nav(
     context: ContextTypes.DEFAULT_TYPE,
 ) -> None:
     query = update.callback_query
-    await query.answer()
 
     if not await _require_admin(update):
+        await query.answer()
         return
 
     pool = context.bot_data.get('pool')
@@ -452,10 +444,16 @@ async def handle_admin_hidden_event_nav(
     event_ids = context.user_data.get('admin_hidden_event_ids', [])
     idx = context.user_data.get('admin_hidden_event_index', 0)
 
-    if direction == 'prev' and idx > 0:
-        context.user_data['admin_hidden_event_index'] = idx - 1
-    elif direction == 'next' and idx < len(event_ids) - 1:
-        context.user_data['admin_hidden_event_index'] = idx + 1
+    toast = None
+    if len(event_ids) > 1 and direction in ('prev', 'next'):
+        if direction == 'prev':
+            toast = '🔁 К концу списка' if idx == 0 else None
+            idx = len(event_ids) - 1 if idx == 0 else idx - 1
+        else:
+            toast = '🔁 К началу списка' if idx >= len(event_ids) - 1 else None
+            idx = 0 if idx >= len(event_ids) - 1 else idx + 1
+        context.user_data['admin_hidden_event_index'] = idx
+    await query.answer(toast)
 
     await _show_admin_hidden_event(update, context, pool)
 

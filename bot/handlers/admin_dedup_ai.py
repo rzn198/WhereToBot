@@ -94,16 +94,22 @@ async def _show(update: Update, context: ContextTypes.DEFAULT_TYPE, notice: str 
 
 async def handle_dd_nav(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     query = update.callback_query
-    await query.answer()
     if not await _require_admin(update):
+        await query.answer()
         return
     direction = query.data.split(':')[2]
     ids = context.user_data.get('dd_ids', [])
     idx = context.user_data.get('dd_idx', 0)
-    if direction == 'prev' and idx > 0:
-        context.user_data['dd_idx'] = idx - 1
-    elif direction == 'next' and idx < len(ids) - 1:
-        context.user_data['dd_idx'] = idx + 1
+    toast = None
+    if len(ids) > 1 and direction in ('prev', 'next'):
+        if direction == 'prev':
+            toast = '🔁 К концу списка' if idx == 0 else None
+            idx = len(ids) - 1 if idx == 0 else idx - 1
+        else:
+            toast = '🔁 К началу списка' if idx >= len(ids) - 1 else None
+            idx = 0 if idx >= len(ids) - 1 else idx + 1
+        context.user_data['dd_idx'] = idx
+    await query.answer(toast)
     await _show(update, context)
 
 
