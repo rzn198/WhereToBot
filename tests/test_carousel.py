@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from bot.handlers import admin_dedup_ai, admin_panel, categories as cats, cinema, navigation
-from bot.handlers.calendar import build_calendar, month_carousel, parse_nav_target
+from bot.handlers.calendar import MONTHS_RU, build_calendar, month_carousel, parse_nav_target
 
 TODAY = date.today()
 
@@ -56,14 +56,22 @@ def test_past_and_beyond_max_dates_do_not_count():
     assert c == {'prev': None, 'next': None}
 
 
-def test_calendar_header_has_arrows_with_targets_and_wrap_flags():
+def label(d, shown):
+    return MONTHS_RU[d.month] + ('' if d.year == shown.year else f' {d.year}')
+
+
+def test_calendar_month_buttons_under_grid_with_target_names_and_wrap_flags():
     rows = build_calendar(M0.year, M0.month, DATES, MAXD, 'cinema:date', 'cinema_cal_nav')
-    prev, title, nxt = rows[0]
+    assert [b.text for b in rows[0]] == ['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс']      # сверху шапки с месяцем нет
+    prev, nxt = rows[-1]
+    assert prev.text == f'◀️ {label(M3, M0)}' and nxt.text == f'{label(M1, M0)} ▶️'
     assert prev.callback_data == f'cinema_cal_nav:{M3.year}-{M3.month:02d}:wp'
     assert nxt.callback_data == f'cinema_cal_nav:{M1.year}-{M1.month:02d}'
-    assert title.text.endswith(str(M0.year)) and title.callback_data == 'catnoop'
-    assert [b.text for b in rows[1]] == ['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс']
-    assert not any(b.callback_data.endswith(':prev') and 'nav' in b.callback_data for r in rows for b in r)   # нижнего ряда стрелок нет
+
+
+def test_single_month_calendar_has_no_month_buttons():
+    rows = build_calendar(M0.year, M0.month, {TODAY}, TODAY, 'cinema:date', 'cinema_cal_nav')
+    assert all(len(r) == 7 for r in rows)
 
 
 def test_all_nav_callbacks_fit_limit():

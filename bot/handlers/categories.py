@@ -189,7 +189,7 @@ async def _show_category_calendar(
     )
     head = f'📅 {category.emoji} {category.label}\n\n'
     if start is None:
-        text = f'{head}Выберите дату или начало периода:'
+        text = f'{head}Выберите дату или начало периода:\n{MONTHS_RU[month]} {year}'
     else:
         last = end or start
         count = await _count_period(context, user_id, code, start, last)

@@ -45,17 +45,24 @@ def _nav_data(prefix: str, step, direction: str) -> str:
     return f'{prefix}:{y}-{m:02d}' + (f":{'wp' if direction == 'prev' else 'wn'}" if wrapped else '')
 
 
-def month_header(year: int, month: int, dates, max_date: date, nav_prefix: str, with_arrows: bool = True) -> list:
-    """Шапка календаря: «◀️ Месяц год ▶️» (стрелки по кругу) или одно название месяца."""
-    title = InlineKeyboardButton(f'{MONTHS_RU[month]} {year}', callback_data=NOOP)
-    if not with_arrows:
-        return [title]
+def _month_label(target: tuple, year: int) -> str:
+    """Название месяца для кнопки; год добавляем, если он отличается от показанного."""
+    y, m = target
+    return MONTHS_RU[m] if y == year else f'{MONTHS_RU[m]} {y}'
+
+
+def month_nav_row(year: int, month: int, dates, max_date: date, nav_prefix: str) -> list:
+    """Две кнопки под календарём: «◀️ Месяц» и «Месяц ▶️» — на каждой название месяца, который она откроет.
+    Месяцы по кругу (только с событиями). Месяц один — кнопок нет (пустой список)."""
     car = month_carousel(year, month, dates, max_date)
-    return [
-        InlineKeyboardButton('◀️', callback_data=_nav_data(nav_prefix, car['prev'], 'prev')),
-        title,
-        InlineKeyboardButton('▶️', callback_data=_nav_data(nav_prefix, car['next'], 'next')),
-    ]
+    row = []
+    if car['prev'] is not None:
+        row.append(InlineKeyboardButton(
+            f"◀️ {_month_label(car['prev'][0], year)}", callback_data=_nav_data(nav_prefix, car['prev'], 'prev')))
+    if car['next'] is not None:
+        row.append(InlineKeyboardButton(
+            f"{_month_label(car['next'][0], year)} ▶️", callback_data=_nav_data(nav_prefix, car['next'], 'next')))
+    return row
 
 
 def parse_nav_target(parts: list, year: int, month: int):
@@ -88,12 +95,9 @@ def build_calendar(
     callback_prefix: str,
     nav_prefix: str,
 ) -> list:
-    """Календарь месяца: шапка «◀️ Месяц год ▶️» (стрелки по кругу), дни недели, недели."""
+    """Календарь месяца: дни недели, недели и под ними кнопки соседних месяцев (по кругу) с названием месяца."""
     today = date.today()
-    rows = [
-        month_header(year, month, dates_with_events, max_date, nav_prefix),
-        [InlineKeyboardButton(d, callback_data=NOOP) for d in ['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс']],
-    ]
+    rows = [[InlineKeyboardButton(d, callback_data=NOOP) for d in ['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс']]]
     for week in calendar.monthcalendar(year, month):
         row = []
         for day in week:
@@ -106,6 +110,9 @@ def build_calendar(
             else:
                 row.append(InlineKeyboardButton(str(day), callback_data=f'{callback_prefix}:{current_date.isoformat()}'))
         rows.append(row)
+    nav = month_nav_row(year, month, dates_with_events, max_date, nav_prefix)
+    if nav:
+        rows.append(nav)
     return rows
 
 
@@ -153,19 +160,18 @@ def build_range_calendar(
 
     Состояния:
       start=None            — ничего не выбрано; нажатие на активный день: catpick:<code>:<ISO> (выбрать начало);
-                              в шапке «◀️ Месяц год ▶️»; на границе стрелка показывает подсказку (catnoop:prev|next).
+                              под календарём «◀️ Месяц» и «Месяц ▶️» (по кругу, месяцы с событиями).
       start задан, end=None — выбрано начало: активные дни несут начало (catpick:<code>:<ISO>:<начало>), повторное
-                              нажатие на то же число открывает ленту этого дня; в шапке только название месяца.
+                              нажатие на то же число открывает ленту этого дня; кнопок месяцев нет.
       start и end           — выбран период: дни периода синие (в том числе дни без событий внутри него), нажатие
-                              на активный день начинает выбор заново; в шапке только название месяца.
+                              на активный день начинает выбор заново; кнопок месяцев нет.
     Всё нужное для обработки лежит в callback_data кнопки, состояние бота не хранится (переживает перезапуск).
     """
     today = date.today()
     lo = start
     hi = end or start
     selecting = start is not None
-    rows = [month_header(year, month, active, max_date, f'catcal_nav:{code}', with_arrows=not selecting)]
-    rows.append([InlineKeyboardButton(d, callback_data=NOOP) for d in ['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс']])
+    rows = [[InlineKeyboardButton(d, callback_data=NOOP) for d in ['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс']]]
 
     for week in calendar.monthcalendar(year, month):
         row = []
@@ -188,6 +194,10 @@ def build_range_calendar(
                 row.append(InlineKeyboardButton('·', callback_data=NOOP))
         rows.append(row)
 
+    if not selecting:    # пока выбран день или период, месяц зафиксирован
+        nav = month_nav_row(year, month, active, max_date, f'catcal_nav:{code}')
+        if nav:
+            rows.append(nav)
     return rows
 
 

@@ -273,7 +273,7 @@ async def _show_admin_hidden_calendar(
         context=context,
         chat_id=chat_id,
         menu_message_id=menu_message_id,
-        text="👁 *Скрытые события — выберите дату:*",
+        text=f"👁 *Скрытые события — выберите дату:*\n\n{MONTHS_RU[month]} {year}",
         keyboard=InlineKeyboardMarkup(keyboard),
     )
 
