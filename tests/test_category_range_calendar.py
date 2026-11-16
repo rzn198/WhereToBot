@@ -65,8 +65,8 @@ def test_nothing_selected_active_days_start_selection_and_arrows_work():
     btn = day_buttons(rows)[str(TODAY.day)]
     assert btn.callback_data == f'catpick:concerts:{TODAY.isoformat()}'
     assert getattr(btn, 'style', None) is None
-    assert [b.text for b in rows[0]][1] == f'{MONTHS_RU[m]} {y}' and [b.text for b in rows[0]][::2] == ['◀️', '▶️']
-    assert rows[0][0].callback_data == 'catnoop:prev' and rows[0][2].callback_data == 'catnoop:next'   # месяц один: подсказка
+    assert [b.text for b in rows[0]] == ['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс']       # шапки с месяцем нет
+    assert not [b for b in flat(rows) if 'catcal_nav' in b.callback_data or b.callback_data in ('catnoop:prev', 'catnoop:next')]   # месяц один: кнопок месяцев нет
 
 def test_start_selected_days_carry_start_blue_start_and_arrows_off():
     y, m = _month(TODAY)
@@ -81,8 +81,7 @@ def test_start_selected_days_carry_start_blue_start_and_arrows_off():
         assert end.callback_data == f'catpick:concerts:{TODAY.replace(day=last_day).isoformat()}:{TODAY.isoformat()}'
         assert getattr(end, 'style', None) is None
     assert not any(b.callback_data.startswith('catcal_nav:') for b in flat(rows))
-    assert len(rows) == 2 + len(__import__('calendar').monthcalendar(y, m))      # название месяца, дни недели, недели; стрелок нет
-    assert [b.text for b in rows[0]] == [f'{MONTHS_RU[m]} {y}']
+    assert len(rows) == 1 + len(__import__('calendar').monthcalendar(y, m))      # дни недели и недели; кнопок месяцев нет
 
 
 def test_selection_has_no_blank_button_row_at_the_bottom():
@@ -268,3 +267,15 @@ async def test_noop_buttons_answer_with_hint_on_arrows():
         upd, ctx, q = make_update(data)
         await cats.handle_calendar_noop(upd, ctx)
         q.answer.assert_awaited_once_with(hint)
+
+
+def test_month_buttons_under_calendar_show_target_month_names():
+    far = date.today() + timedelta(days=200)
+    active = {TODAY, far}
+    rows = build_range_calendar(TODAY.year, TODAY.month, active, far, 'concerts')
+    nav = rows[-1]
+    assert len(nav) == 2 and nav[0].text.startswith('◀️ ') and nav[1].text.endswith(' ▶️')
+    want = MONTHS_RU[far.month] + ('' if far.year == TODAY.year else f' {far.year}')
+    assert nav[0].text == f'◀️ {want}' and nav[1].text == f'{want} ▶️'                 # в календаре из двух месяцев оба ведут в соседний
+    assert nav[0].callback_data == f'catcal_nav:concerts:{far.year}-{far.month:02d}:wp'
+    assert nav[1].callback_data == f'catcal_nav:concerts:{far.year}-{far.month:02d}'

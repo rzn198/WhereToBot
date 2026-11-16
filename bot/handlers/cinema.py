@@ -491,6 +491,6 @@ async def _show_cinema_calendar(
     await edit_or_send(
         context=context,
         chat_id=chat_id,
-        text="📅 *Киноафиша — выберите дату:*",
+        text=f"📅 *Киноафиша — выберите дату:*\n\n{MONTHS_RU[month]} {year}",
         keyboard=InlineKeyboardMarkup(keyboard),
     )
