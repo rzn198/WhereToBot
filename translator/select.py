@@ -7,7 +7,8 @@
     (админ вернул) считается победителем;
   * его дата уже обработана дедупликатором ПОСЛЕ появления события (dedup_dates.processed_at >= created_at):
     свежесобранные события не переводятся до проверки на дубли;
-  * при only_upcoming — дата не в прошлом. Ближайшие события идут первыми.
+  * при only_upcoming — дата не в прошлом. Ближайшие события идут первыми;
+  * описание НЕ на русском: русские описания не переводим и ничего о них не пишем — бот покажет оригинал целиком.
 """
 from __future__ import annotations
 
@@ -16,6 +17,7 @@ from datetime import date
 import asyncpg
 
 from db.tables import Tables
+from translator.text import is_russian
 
 
 async def select_candidates(pool: asyncpg.Pool, sources: list[str], *, only_upcoming: bool = True,
@@ -39,8 +41,6 @@ async def select_candidates(pool: asyncpg.Pool, sources: list[str], *, only_upco
                 WHERE dd.day = e.starts_at AND dd.processed_at >= e.created_at)
         ORDER BY e.starts_at, e.id
     """
-    args: list = [[s.lower() for s in sources], only_upcoming, today]
-    if limit:
-        sql += " LIMIT $4"
-        args.append(limit)
-    return await pool.fetch(sql, *args)
+    rows = await pool.fetch(sql, [s.lower() for s in sources], only_upcoming, today)
+    rows = [r for r in rows if not is_russian(r['description'])]
+    return rows[:limit] if limit else rows

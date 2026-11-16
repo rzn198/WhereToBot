@@ -287,7 +287,11 @@ async def test_tick_triggers_translation_only_after_successful_dedup(monkeypatch
         yield True
 
     monkeypatch.setattr(dedup_main, "try_lock", free_lock)
-    monkeypatch.setattr(dedup_main.dedup_requests, "has_pending", lambda pool: asyncio.sleep(0, False))   # пула нет: очередь ручных запросов пуста
+    try:                                        # очередь ручных запросов (кнопка в админке): пула нет, значит она пуста
+        from db import dedup_requests
+        monkeypatch.setattr(dedup_requests, "has_pending", lambda pool: asyncio.sleep(0, False))
+    except ImportError:                         # без пакета ручного запуска такого модуля нет — патчить нечего
+        pass
     fired, sent = [], []
 
     async def send(text):
@@ -369,3 +373,36 @@ def test_translate_key_fallback_to_legacy_name(monkeypatch):
     assert _translation_section({}, {"base_url": "u"})["api_key"] == "old"
     monkeypatch.setenv("OPENCODE_TRANSLATE_API_KEY", "new")
     assert _translation_section({}, {"base_url": "u"})["api_key"] == "new"
+
+
+# ------------------------------------------------------------------ проверка «русский, не копия» (п.7)
+SERB = ("Jesen uvek traži malo više topline, a mi smo rešili da je podelimo sa vama uz džez i čašu dobrog vina. "
+        "Sa velikim uzbuđenjem vas pozivamo na naše novo druženje u amfiteatru SPENS-a.")
+RUS = ("Осень всегда требует немного больше тепла, и мы решили поделиться им с вами под джаз и бокал хорошего вина. "
+       "С огромным удовольствием приглашаем вас на нашу новую встречу в амфитеатре SPENS.")
+
+
+def test_validate_rejects_returned_original():
+    with pytest.raises(BadTranslation, match="cyrillic"):
+        validate(SERB, SERB)
+    with pytest.raises(BadTranslation, match="cyrillic"):
+        validate(SERB.replace("Jesen", "Jesen,"), SERB)        # почти копия без кириллицы
+
+
+def test_validate_rejects_non_russian_answer_and_cyrillic_copy():
+    with pytest.raises(BadTranslation, match="not russian"):
+        validate("This is an English text without any Cyrillic letters at all, written in full sentences.", SERB)
+    cyr = "Ово је текст на српском ћириличком писму који модел није превео ни једном речју заиста."
+    with pytest.raises(BadTranslation, match="original"):
+        validate(cyr, cyr)
+
+
+def test_validate_accepts_real_translation_and_latin_heavy_names():
+    validate(RUS, SERB)
+    en = "On November 27 at Zappa Barka, get ready for a night of rock and pop-rock hits with Green Day, Blink-182, Paramore."
+    validate("27 ноября в Zappa Barka вас ждёт вечер рок- и поп-рок-хитов: Green Day, Blink-182, Paramore, My Chemical Romance.", en)
+
+
+def test_validate_skips_content_checks_for_short_originals():
+    validate("Jungle Leez", "Jungle Leez")                        # короткое название тура/имя: возврат без изменений допустим
+    validate("Praying Mantis – Time Tells No Lies Tour", "Praying Mantis – Time Tells No Lies Tour")

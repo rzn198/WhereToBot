@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, time
 
 
 @dataclass
@@ -29,6 +29,8 @@ class EventItem:
     auto_hide_reason: str | None = None
     # Правило скрейпера задало категории жёстко (метка «Музеи»): AI-категоризация такую запись не трогает; скрытия нет
     label_rule: str | None = None
+    # Время начала (Белград), если источник его знает точно. None — неизвестно (карточка время не показывает).
+    starts_time:   time | None = None
 
 
 class BaseScraper:

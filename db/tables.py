@@ -21,3 +21,4 @@ class Tables:
     FAVORITE_MOVES        = 'favorite_moves'
     COLLECTOR_RUNS        = 'collector_runs'
     PUSH_LOG              = 'push_log'
+    DEDUP_REQUESTS        = 'dedup_requests'

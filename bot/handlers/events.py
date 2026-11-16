@@ -145,7 +145,7 @@ async def fetch_event_by_id(
         row = await pool.fetchrow(f"""
             SELECT
                 e.id, e.title, e.description, e.description_ru, e.starts_at,
-                e.venue, e.city, e.images, e.image_file_id, e.source_url, e.hidden_by_admin,
+                e.venue, e.city, e.images, e.image_file_id, e.source_url, e.hidden_by_admin, e.starts_time,
                 EXISTS(
                     SELECT 1 FROM {Tables.EVENT_FAVORITES}
                     WHERE user_id = $2 AND event_id = e.id
