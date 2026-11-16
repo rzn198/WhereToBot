@@ -21,7 +21,7 @@ def get_main_menu_inline(is_admin: bool = False, counts: dict | None = None) -> 
             InlineKeyboardButton(f"🗂 Остальные события{_n(counts, 'rest')}", callback_data='cats:menu')
         ],
         [
-            InlineKeyboardButton('⭐ Избранное', callback_data='filter:favorites')
+            InlineKeyboardButton('⭐ Твое запланированное', callback_data='filter:favorites')
         ],
         [
             InlineKeyboardButton('🎬 Афиша кинотеатров', callback_data='cinema:menu'),

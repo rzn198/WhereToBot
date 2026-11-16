@@ -25,7 +25,6 @@ def get_event_nav_keyboard(
     is_preview: bool = False,
     category_code: str | None = None,
     event_date=None,
-    source_url: str | None = None,
     is_admin: bool = False,
     under_review: bool = False,
     reviewed: bool = False,
@@ -34,11 +33,10 @@ def get_event_nav_keyboard(
 
     category_code — код категории, из ленты которой открыта карточка: появляется кнопка «К категории».
     event_date    — дата события: над стрелками показывается некликабельная кнопка с датой.
-    source_url    — оригинал поста в канале: кнопка «Открыть в канале» (у событий ссылка на источник в тексте карточки).
     is_admin      — админу добавляется кнопка пересмотра («На пересмотре» / «Пересмотрено» — неактивные).
     """
     fav_btn = InlineKeyboardButton(
-        '❤️ В избранное' if not is_favorite else '❤️ Убрать',
+        '❤️ Напомнить' if not is_favorite else '💔 Удалить',
         callback_data=f'fav:{"add" if not is_favorite else "remove"}:{surrogate_id}'
     )
 
@@ -64,8 +62,6 @@ def get_event_nav_keyboard(
         InlineKeyboardButton('🔜', callback_data='nav:next'),
     ])
     rows.append([fav_btn, hide_btn])
-    if source_url:
-        rows.append([InlineKeyboardButton('📎 Открыть в канале', url=source_url)])
 
     if is_admin:
         if reviewed:

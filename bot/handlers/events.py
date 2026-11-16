@@ -314,7 +314,6 @@ async def show_current_event(
         is_preview=is_preview,
         category_code=category_code,
         event_date=event.get('date'),
-        source_url=event.get('channel_url') or None,
         is_admin=is_admin,
         under_review=under_review,
         reviewed=reviewed,

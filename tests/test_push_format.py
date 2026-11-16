@@ -91,7 +91,7 @@ def test_long_push_is_split_with_continuous_numbering_and_valid_links():
 def test_keyboard_order_and_callbacks():
     rows = push.keyboard().inline_keyboard
     assert [[(b.text, b.callback_data) for b in r] for r in rows] == [
-        [("⭐ В избранное", "alert:fav")], [("Закрыть", "alert:dismiss")]]
+        [("⭐ В запланированное", "alert:fav")], [("Закрыть", "alert:dismiss")]]
 
 
 # ------------------------------------------------------------------ доставка
@@ -261,11 +261,11 @@ async def test_bot_username_prefers_attribute_then_get_me_then_none():
     assert await push.bot_username(bot) is None
 
 
-# ------------------------------------------------------------------ кнопка «Открыть в канале» на карточке поста
-def test_post_card_keyboard_has_channel_button_only_with_url():
+# ------------------------------------------------------------------ кнопки карточки: без «Открыть в канале», «Убрать из избранного»
+def test_card_keyboard_has_no_channel_button_and_remind_delete_texts():
     from bot.keyboards.event_nav import get_event_nav_keyboard
-    with_url = get_event_nav_keyboard(0, 3, 5, False, source_url="https://t.me/clubx/55").inline_keyboard
-    btn = [b for r in with_url for b in r if b.text == "📎 Открыть в канале"]
-    assert len(btn) == 1 and btn[0].url == "https://t.me/clubx/55"
-    without = get_event_nav_keyboard(0, 3, 5, False).inline_keyboard
-    assert not [b for r in without for b in r if "канале" in b.text]
+    rows = get_event_nav_keyboard(0, 3, 5, True).inline_keyboard
+    texts = [b.text for r in rows for b in r]
+    assert "💔 Удалить" in texts and "❤️ Напомнить" not in texts
+    assert not [t for t in texts if "канале" in t]
+    assert "❤️ Напомнить" in [b.text for r in get_event_nav_keyboard(0, 3, 5, False).inline_keyboard for b in r]
