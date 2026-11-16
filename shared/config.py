@@ -109,8 +109,8 @@ def _event_categories_section(y: dict, oc: dict) -> dict:
     scope:  unreliable (только события, где скрейпер не получил категорию с сайта: подстановка, словарь, пусто)
             | all (все события).
     Ключ: OPENCODE_EVENTS_API_KEY, если не задан — OPENCODE_PARSING_API_KEY."""
-    method = (os.getenv('EVENT_CATEGORY_METHOD') or y.get('method') or 'source').strip().lower()
-    scope = (os.getenv('EVENT_CATEGORY_SCOPE') or y.get('scope') or 'unreliable').strip().lower()
+    method = _word(os.getenv('EVENT_CATEGORY_METHOD') or y.get('method'), 'source')
+    scope = _word(os.getenv('EVENT_CATEGORY_SCOPE') or y.get('scope'), 'unreliable')
     return {
         'method': method if method in EVENT_CATEGORY_METHODS else 'source',
         'scope': scope if scope in EVENT_CATEGORY_SCOPES else 'unreliable',
@@ -131,7 +131,7 @@ TRANSLATION_METHODS = ('off', 'shadow', 'on')
 def _translation_section(y: dict, oc: dict) -> dict:
     """Перевод описаний событий (запускается из сервиса deduplicator после его прогона). Ключ: OPENCODE_TRANSLATE_API_KEY (запасной — прежний OPENCODE_API_KEY).
     method: off | shadow (только лог) | on. sources — значения events.source, которые переводим."""
-    method = (os.getenv('TRANSLATION_METHOD') or y.get('method') or 'off').strip().lower()
+    method = _word(os.getenv('TRANSLATION_METHOD') or y.get('method'), 'off')
     sources = y.get('sources') or []
     if isinstance(sources, str):
         sources = sources.split(',')
@@ -156,8 +156,8 @@ def _translation_section(y: dict, oc: dict) -> dict:
 def _parsing_section(y: dict, oc: dict) -> dict:
     """AI-парсинг дат и категорий messages. Отдельный ключ: OPENCODE_PARSING_API_KEY."""
     return {
-        'date_method': (os.getenv('PARSING_DATE_METHOD') or y.get('date_method') or 'regex').strip().lower(),
-        'category_method': (os.getenv('PARSING_CATEGORY_METHOD') or y.get('category_method') or 'dict').strip().lower(),
+        'date_method': _word(os.getenv('PARSING_DATE_METHOD') or y.get('date_method'), 'regex'),
+        'category_method': _word(os.getenv('PARSING_CATEGORY_METHOD') or y.get('category_method'), 'dict'),
         'ai_null_date_fallback': bool(y.get('ai_null_date_fallback', True)),
         'ai_empty_categories_fallback': bool(y.get('ai_empty_categories_fallback', True)),
         'ai_trust_non_event': bool(y.get('ai_trust_non_event', False)),
@@ -209,7 +209,7 @@ def _dedup_section(y: dict, oc: dict) -> dict:
     Отдельный ключ: OPENCODE_DEDUP_API_KEY."""
     ai = y.get('ai') or {}
     out = dict(y)
-    method = (os.getenv('DEDUP_METHOD') or y.get('method') or 'legacy').strip().lower()
+    method = _word(os.getenv('DEDUP_METHOD') or y.get('method'), 'legacy')
     if method not in DEDUP_METHODS:
         method = 'legacy'
     out['method'] = method

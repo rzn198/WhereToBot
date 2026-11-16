@@ -1,6 +1,7 @@
 """Чистые функции перевода описаний: определение русского текста, проверка ответа, сборка description_ru."""
 from __future__ import annotations
 
+from difflib import SequenceMatcher
 import re
 
 TICKETS_LINK_TEXT = "ссылка на билеты здесь"
@@ -71,9 +72,29 @@ def build_description_ru(translated: str, source_url: str, max_chars: int) -> st
     return f"{escape_md(truncated)}\n\n{link}"
 
 
+MIN_CHECK_LETTERS = 40        # короче — проверки «русский / не копия» не применяем (имена, названия туров)
+MIN_CYR_SHARE = 0.3           # ниже — ответ не русский (у верных переводов по замеру не ниже 0.55: много латинских имён)
+MAX_SIMILARITY = 0.9          # выше — модель вернула оригинал (у верных переводов по замеру не выше 0.57, у возврата оригинала 0.999)
+SIM_WINDOW = 600
+
+
+def _cyr_share(text: str) -> float:
+    cyr, lat = len(_CYR.findall(text)), len(_LAT.findall(text))
+    return cyr / (cyr + lat) if cyr + lat else 0.0
+
+
 def validate(result: str, original: str) -> None:
-    """Минимальная проверка: не пусто и не аномально длинно (модель «заболталась»)."""
+    """Проверка ответа модели: не пусто; не аномально длинно (модель «заболталась»); это русский текст, а не возвращённый
+    оригинал. Последние две проверки — только для оригиналов от MIN_CHECK_LETTERS букв."""
     if not result or not result.strip():
         raise BadTranslation("empty result")
     if len(result) > MIN_LEN_FOR_RATIO and len(result) > MAX_LEN_RATIO * max(len(original), 1):
         raise BadTranslation(f"suspicious length {len(result)} vs {len(original)}")
+    if len(_CYR.findall(original)) + len(_LAT.findall(original)) < MIN_CHECK_LETTERS:
+        return
+    share = _cyr_share(result)
+    if share < MIN_CYR_SHARE:
+        raise BadTranslation(f"not russian: cyrillic share {share:.2f}")
+    a, b = original.strip()[:SIM_WINDOW], result.strip()[:SIM_WINDOW]
+    if SequenceMatcher(None, a, b, autojunk=False).ratio() > MAX_SIMILARITY:
+        raise BadTranslation("result is the original text")
