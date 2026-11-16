@@ -76,7 +76,7 @@ channels:
       parser: "running_beg"
 
 translation:
-  method: off
+  method: on
   sources:                    # значения events.source; пусто = ничего не переводим
     - efinityrs
     - biletrs
