@@ -71,7 +71,7 @@ def test_settings_defaults_and_normalisation():
 
 
 def test_config_section_reads_env_and_sources(monkeypatch):
-    monkeypatch.setenv("OPENCODE_API_KEY", "k1")
+    monkeypatch.setenv("OPENCODE_TRANSLATE_API_KEY", "k1")
     monkeypatch.setenv("TRANSLATION_METHOD", "shadow")
     c = _translation_section({"method": "on", "sources": "A, b", "models": ["m"]}, {"base_url": "https://gw"})
     assert (c["method"], c["sources"], c["api_key"], c["base_url"]) == ("shadow", ["a", "b"], "k1", "https://gw")
@@ -166,17 +166,17 @@ ST_ON = TranslationSettings(method="on", sources=("efinityrs",), concurrency=2)
 
 
 @needs_pg
-async def test_run_pass_translates_serbian_and_copies_russian_without_model(pool):
+async def test_run_pass_translates_serbian_and_ignores_russian(pool):
     await processed(pool, TODAY + timedelta(days=5))
     sr = await add_event(pool, 1)
     ru = await add_event(pool, 2, desc="Концерт группы в клубе. Начало в 20:00, вход свободный для всех.")
     calls = []
     res = await tsvc.run_pass(pool, make_client(ok_handler(calls)), ST_ON)
-    assert (res.status, res.candidates, res.translated, res.copied_ru, res.failed) == ("ok", 2, 1, 1, 0)
+    assert (res.status, res.candidates, res.translated, res.failed) == ("ok", 1, 1, 0)       # русское описание — не кандидат
     assert len(calls) == 1 and "Koncert" in calls[0]                               # модель видела только сербский текст
     got = {r["id"]: r["description_ru"] for r in await pool.fetch("SELECT id, description_ru FROM events")}
     assert got[sr].startswith("Концерт группы X в клубе Y.") and got[sr].endswith("(https://x.rs/1)")
-    assert got[ru].startswith("Концерт группы в клубе.") and "[ссылка на билеты здесь](https://x.rs/2)" in got[ru]
+    assert got[ru] is None                                                          # русское: description_ru не пишем
     again = await tsvc.run_pass(pool, make_client(ok_handler(calls)), ST_ON)       # повтор ничего не делает
     assert again.candidates == 0 and len(calls) == 1
 
@@ -199,6 +199,7 @@ async def test_run_pass_stops_when_models_exhausted_and_keeps_rest(pool):
         await add_event(pool, i)
     res = await tsvc.run_pass(pool, make_client(lambda r: httpx.Response(429, json={})), ST_ON)
     assert res.status == "incomplete" and res.translated == 0 and res.remaining == 3
+    assert res.error                                                                # причина попадёт в сообщение админу
     assert await pool.fetchval("SELECT count(*) FROM events WHERE description_ru IS NULL") == 3
 
 
@@ -286,6 +287,7 @@ async def test_tick_triggers_translation_only_after_successful_dedup(monkeypatch
         yield True
 
     monkeypatch.setattr(dedup_main, "try_lock", free_lock)
+    monkeypatch.setattr(dedup_main.dedup_requests, "has_pending", lambda pool: asyncio.sleep(0, False))   # пула нет: очередь ручных запросов пуста
     fired, sent = [], []
 
     async def send(text):
@@ -297,3 +299,73 @@ async def test_tick_triggers_translation_only_after_successful_dedup(monkeypatch
     assert fired == ["ok"]                                                          # skipped/error — перевода нет
     await dedup_main.tick(None, None, {"method": "legacy"}, st, on_ok=lambda r: fired.append("legacy"))
     assert fired == ["ok"]
+
+
+# ------------------------------------------------------------------ сообщения админу о сбоях перевода
+
+async def _alerts(statuses, st=None, retries_before=None):
+    """Прогоняет хук по цепочке статусов, возвращает отправленные сообщения."""
+    sent = []
+
+    async def send(text):
+        sent.append(text)
+
+    it = iter(statuses)
+
+    async def fake_pass(*a, **kw):
+        status = next(it)
+        return PassResult(status=status, error="все модели исчерпаны" if status != "ok" else "", remaining=5, translated=7)
+
+    orig = tsvc.run_pass
+    tsvc.run_pass = fake_pass
+    try:
+        hook = TranslationHook(None, None, st or TranslationSettings(method="on", sources=("a",), max_retries=2), send=send)
+        for i, _ in enumerate(statuses):
+            hook.retries = min(i, hook.st.max_retries) if retries_before is None else retries_before[i]
+            hook.trigger(f"t{i}")
+            await hook._task
+    finally:
+        tsvc.run_pass = orig
+    return sent
+
+
+async def test_alert_once_per_episode_then_exhausted_then_recovery():
+    sent = await _alerts(["incomplete", "incomplete", "incomplete", "incomplete", "ok", "ok"])
+    assert len(sent) == 3                                                           # 4 сбоя подряд и 2 успеха: только 3 сообщения
+    assert sent[0].startswith("🔴") and "все модели исчерпаны" in sent[0] and "Повтор через 30 мин" in sent[0]
+    assert sent[1].startswith("🔴") and "повторы исчерпаны" in sent[1]
+    assert sent[2].startswith("🟢") and "переведено 7" in sent[2]
+
+
+async def test_new_episode_after_recovery_alerts_again():
+    sent = await _alerts(["error", "ok", "error"], retries_before=[0, 0, 0])
+    assert [t[:1] for t in sent] == ["🔴", "🟢", "🔴"]
+
+
+async def test_alert_skipped_means_config_problem_no_retry_promise():
+    sent = await _alerts(["skipped", "skipped"])
+    assert len(sent) == 1 and "skipped" in sent[0] and "Автоповтор не предусмотрен" in sent[0]
+
+
+async def test_no_alerts_in_shadow_or_when_disabled_or_without_sender():
+    assert await _alerts(["error"], TranslationSettings(method="shadow", sources=("a",))) == []
+    assert await _alerts(["error"], TranslationSettings(method="on", sources=("a",), alerts=False)) == []
+    hook = TranslationHook(None, None, TranslationSettings(method="on", sources=("a",)))     # без send
+    await hook._alert(PassResult(status="error", error="x"))
+
+
+async def test_failed_alert_send_does_not_break_hook():
+    async def boom(text):
+        raise RuntimeError("telegram down")
+
+    hook = TranslationHook(None, None, TranslationSettings(method="on", sources=("a",)), send=boom)
+    await hook._alert(PassResult(status="error", error="x"))                                 # не бросает
+    assert hook._bad is True
+
+
+def test_translate_key_fallback_to_legacy_name(monkeypatch):
+    monkeypatch.delenv("OPENCODE_TRANSLATE_API_KEY", raising=False)
+    monkeypatch.setenv("OPENCODE_API_KEY", "old")
+    assert _translation_section({}, {"base_url": "u"})["api_key"] == "old"
+    monkeypatch.setenv("OPENCODE_TRANSLATE_API_KEY", "new")
+    assert _translation_section({}, {"base_url": "u"})["api_key"] == "new"

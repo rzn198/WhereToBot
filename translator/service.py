@@ -18,7 +18,7 @@ from loguru import logger
 from db.tables import Tables
 from shared.ai import AIUnavailable
 from translator.select import select_candidates
-from translator.text import SYSTEM_PROMPT, BadTranslation, build_description_ru, cut_input, is_russian, validate
+from translator.text import SYSTEM_PROMPT, BadTranslation, build_description_ru, cut_input, validate
 
 METHODS = ('off', 'shadow', 'on')
 
@@ -34,6 +34,7 @@ class TranslationSettings:
     retry_minutes: float = 30
     max_retries: int = 3
     run_on_start: bool = True
+    alerts: bool = True
 
     @property
     def enabled(self) -> bool:
@@ -54,6 +55,7 @@ def translation_settings(cfg: dict) -> TranslationSettings:
         retry_minutes=max(1.0, float(c.get('retry_minutes', d.retry_minutes))),
         max_retries=max(0, int(c.get('max_retries', d.max_retries))),
         run_on_start=bool(c.get('run_on_start', d.run_on_start)),
+        alerts=bool(c.get('alerts', d.alerts)),
     )
 
 
@@ -62,10 +64,13 @@ class PassResult:
     status: str = 'ok'          # ok | incomplete (модели исчерпаны/недоступны) | off | skipped
     candidates: int = 0
     translated: int = 0         # переведено моделью
-    copied_ru: int = 0          # уже русские: только добавлена ссылка
     failed: int = 0             # ответ модели не прошёл проверку (останется на следующий раз)
     stale: int = 0              # описание изменилось во время перевода — результат не сохранён
     remaining: int = 0
+    error: str = ''             # причина, если status не ok (для сообщения админу)
+
+
+BAD_STATUSES = ('incomplete', 'error', 'skipped')
 
 
 async def run_pass(pool, client, st: TranslationSettings, *, today=None) -> PassResult:
@@ -82,15 +87,15 @@ async def run_pass(pool, client, st: TranslationSettings, *, today=None) -> Pass
 
     if st.method == 'shadow':
         by_source = Counter(r['source'] for r in rows)
-        russian = sum(1 for r in rows if is_russian(r['description']))
-        logger.info(f"TRANSLATE_SHADOW | кандидатов={len(rows)} | уже на русском (без модели)={russian} | "
-                    f"к переводу моделью={len(rows) - russian} | источники={dict(by_source)}")
+        logger.info(f"TRANSLATE_SHADOW | к переводу моделью={len(rows)} | источники={dict(by_source)} "
+                    f"(русские описания не переводятся и не записываются)")
         res.status = 'ok'
         return res
 
     if not client.configured:
-        logger.warning("TRANSLATE_SKIP | нет OPENCODE_API_KEY или translation.models")
+        logger.warning("TRANSLATE_SKIP | нет OPENCODE_TRANSLATE_API_KEY или translation.models")
         res.status = 'skipped'
+        res.error = "нет OPENCODE_TRANSLATE_API_KEY или translation.models"
         return res
 
     client.begin_run()
@@ -109,10 +114,6 @@ async def run_pass(pool, client, st: TranslationSettings, *, today=None) -> Pass
 
     async def one(row) -> None:
         text = row['description']
-        if is_russian(text):
-            await save(row, text, text)
-            res.copied_ru += 1
-            return
         async with sem:
             if stop.is_set():
                 res.remaining += 1
@@ -124,6 +125,7 @@ async def run_pass(pool, client, st: TranslationSettings, *, today=None) -> Pass
             except AIUnavailable as e:
                 stop.set()
                 res.remaining += 1
+                res.error = res.error or str(e)
                 logger.warning(f"TRANSLATE_STOP | {e}")
                 return
             except BadTranslation as e:
@@ -139,7 +141,7 @@ async def run_pass(pool, client, st: TranslationSettings, *, today=None) -> Pass
     if stop.is_set():
         res.status = 'incomplete'
     logger.info(f"TRANSLATE_DONE | status={res.status} | кандидатов={res.candidates} | переведено={res.translated} | "
-                f"уже_на_русском={res.copied_ru} | не_прошли_проверку={res.failed} | устарело={res.stale} | "
+                f"не_прошли_проверку={res.failed} | устарело={res.stale} | "
                 f"осталось={res.remaining} | {client.stats.line()}")
     return res
 
@@ -147,8 +149,11 @@ async def run_pass(pool, client, st: TranslationSettings, *, today=None) -> Pass
 class TranslationHook:
     """Запуск перевода из сервиса дедупликатора: не блокирует его цикл, два прохода одновременно не идут."""
 
-    def __init__(self, pool, client, st: TranslationSettings):
-        self.pool, self.client, self.st = pool, client, st
+    def __init__(self, pool, client, st: TranslationSettings, send=None):
+        """send — async (text) -> bool для сообщений админу; None = без сообщений."""
+        self.pool, self.client, self.st, self.send = pool, client, st, send
+        self._bad = False                           # идёт эпизод сбоя: 🔴 уже отправлено
+        self._exhausted_sent = False
         self._task: asyncio.Task | None = None
         self._again = False
         self.last: PassResult | None = None
@@ -175,14 +180,41 @@ class TranslationHook:
             self.last = await run_pass(self.pool, self.client, self.st)
         except Exception as e:                      # перевод не должен ронять дедупликатор
             logger.exception(f"TRANSLATE_ERROR | {type(e).__name__}: {e}")
-            self.last = PassResult(status='error')
+            self.last = PassResult(status='error', error=f"{type(e).__name__}: {e}")
         self.last_finish = datetime.now(timezone.utc)
         if self.last.status == 'ok':
             self.retries = 0
+        await self._alert(self.last)
         if self._again:
             self._again = False
             self._task = None
             self.trigger('queued')
+
+    async def _alert(self, res: PassResult) -> None:
+        """🔴 при первом сбое подряд, 🟢 при восстановлении, отдельное сообщение — когда повторы кончились. Только method=on."""
+        if self.send is None or not self.st.alerts or self.st.method != 'on':
+            return
+        text = None
+        if res.status in BAD_STATUSES:
+            if not self._bad:
+                self._bad = True
+                again = (f"Повтор через {self.st.retry_minutes:g} мин, до {self.st.max_retries} раз подряд."
+                         if res.status != 'skipped' and self.st.max_retries else "Автоповтор не предусмотрен: исправь настройку и перезапусти сервис.")
+                text = (f"🔴 Перевод описаний не выполнен ({res.status}): {res.error or 'причина не указана'}\n"
+                        f"Не переведено событий: {res.remaining or res.candidates}. {again}")
+            elif (res.status != 'skipped' and self.st.max_retries and self.retries >= self.st.max_retries
+                  and not self._exhausted_sent):
+                self._exhausted_sent = True
+                text = ("🔴 Перевод описаний: повторы исчерпаны, модели по-прежнему недоступны. "
+                        "Следующая попытка — после следующего успешного прогона дедупликатора или перезапуска сервиса.")
+        elif res.status == 'ok' and self._bad:
+            self._bad = self._exhausted_sent = False
+            text = f"🟢 Перевод описаний снова работает (переведено {res.translated})"
+        if text:
+            try:
+                await self.send(text)
+            except Exception as e:                  # сообщение админу не должно ронять перевод
+                logger.error(f"TRANSLATE_ALERT_ERROR | {type(e).__name__}: {e}")
 
     def poll(self, now: datetime | None = None) -> bool:
         """Повтор после неудачи (модели недоступны): через retry_minutes, не больше max_retries раз подряд."""

@@ -72,12 +72,23 @@ def _hhmm(value, default: str) -> str:
     return default
 
 
+def _word(value, default: str) -> str:
+    """Режим из YAML/окружения как строка. YAML 1.1 читает голые on/off/yes/no как True/False: `mode: off` без этой
+    функции превращался в 'on' (False or 'on'), а `mode: on` падал на .strip(). True → 'on', False → 'off'."""
+    if value is True:
+        return 'on'
+    if value is False:
+        return 'off'
+    return (str(value).strip().lower() if value not in (None, '') else default)
+
+
 def _push_section(y: dict, sched: dict) -> dict:
     """Ежедневный пуш «сегодня из вашего избранного».
     mode: off (не запускается) | shadow (только лог, пользователям ничего не уходит) | on. Переопределяется PUSH_MODE.
     time / catchup_until — по времени Белграда. max_chars — длина текста поста в строке пуша.
     Время по умолчанию берётся из прежнего scheduler.push_alert_time."""
-    mode = (os.getenv('PUSH_MODE') or y.get('mode') or 'on').strip().lower()
+    env = os.getenv('PUSH_MODE')
+    mode = _word(env if env else y.get('mode'), 'on')
     return {
         'mode': mode if mode in PUSH_MODES else 'on',
         'time': _hhmm(y.get('time') or sched.get('push_alert_time'), '09:00'),
@@ -118,7 +129,7 @@ TRANSLATION_METHODS = ('off', 'shadow', 'on')
 
 
 def _translation_section(y: dict, oc: dict) -> dict:
-    """Перевод описаний событий (запускается из сервиса deduplicator после его прогона). Ключ: OPENCODE_API_KEY.
+    """Перевод описаний событий (запускается из сервиса deduplicator после его прогона). Ключ: OPENCODE_TRANSLATE_API_KEY (запасной — прежний OPENCODE_API_KEY).
     method: off | shadow (только лог) | on. sources — значения events.source, которые переводим."""
     method = (os.getenv('TRANSLATION_METHOD') or y.get('method') or 'off').strip().lower()
     sources = y.get('sources') or []
@@ -129,7 +140,7 @@ def _translation_section(y: dict, oc: dict) -> dict:
         'sources': [str(s).strip().lower() for s in sources if str(s).strip()],
         'models': list(y.get('models') or []),
         'base_url': y.get('base_url') or oc['base_url'],
-        'api_key': os.getenv('OPENCODE_API_KEY', ''),
+        'api_key': os.getenv('OPENCODE_TRANSLATE_API_KEY') or os.getenv('OPENCODE_API_KEY', ''),
         'timeout': float(y.get('timeout', 60)),
         'max_chars': int(y.get('max_chars', 600)),
         'input_chars': int(y.get('input_chars', 1500)),
@@ -138,6 +149,7 @@ def _translation_section(y: dict, oc: dict) -> dict:
         'retry_minutes': float(y.get('retry_minutes', 30)),
         'max_retries': int(y.get('max_retries', 3)),
         'run_on_start': bool(y.get('run_on_start', True)),
+        'alerts': bool(y.get('alerts', True)),          # сообщения админу о сбоях перевода (один раз на эпизод)
     }
 
 
