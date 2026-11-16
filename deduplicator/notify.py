@@ -129,3 +129,16 @@ def transition_text(prev_status: str | None, status: str, error: str, st: Servic
     if not bad_now and bad_before:
         return "🟢 Дедупликатор снова работает"
     return None
+
+
+def manual_summary(res, method: str, force: bool) -> str:
+    """Итог ручного запуска из админки: сообщаем всегда, даже если ничего не изменилось."""
+    kind = 'полный пересчёт' if force else 'изменившиеся даты'
+    if res.status != 'ok':
+        return f"🔴 Ручной запуск дедупа ({kind}) не выполнен ({res.status}): {res.error or 'причина не указана'}"
+    st = res.stats
+    return (f"✅ Ручной запуск дедупа ({kind}) завершён · method={method}\n"
+            f"Дат {st.get('dates_processed')}/{st.get('dates_total')} · запросов {st.get('requests')} · групп {st.get('groups_found')} · "
+            f"скрыто {st.get('hidden')} · возвращено {st.get('unhidden')} · сохранено прежних пар {st.get('sticky', 0)}"
+            + (f" · плохих дат {st.get('bad_days')}" if st.get('bad_days') else '')
+            + (f" · пропущено по лимиту {st.get('skipped_days')}" if st.get('skipped_days') else ''))

@@ -128,10 +128,15 @@ def build_event_card(
 
     url = row.get('source_url')
     if url:
+        link_text = '🎟 Билеты и подробности'
         label = source_label(url)
+        if label:
+            link_text += f' · {label}'
+        t = row.get('starts_time')
+        if t is not None and hasattr(t, 'strftime'):
+            link_text += f" · {t.strftime('%H:%M')}"
         b.add('\n\n')
-        b.add(f"🎟 Билеты и подробности · {label}" if label else '🎟 Билеты и подробности',
-              MessageEntity.TEXT_LINK, url)
+        b.add(link_text, MessageEntity.TEXT_LINK, url)
 
     if is_preview:
         b.add('\n\n')

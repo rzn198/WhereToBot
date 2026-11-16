@@ -10,6 +10,7 @@ os.environ.setdefault('APP_ENV', 'production')
 
 from loguru import logger
 
+from db import dedup_requests
 from db.review_cleanup import ReviewCleanupJob
 from deduplicator import notify
 from deduplicator.audit import audit_from_cfg
@@ -26,16 +27,31 @@ async def tick(pool, client, cfg: dict, st: ServiceSettings, *, now=None, send=N
     if method not in ('shadow', 'ai'):
         return None
     snap = await load_snapshot(pool, st, now)
-    go, why = decide(snap, st)
+    # Ручной запрос из админки: ждёт только окончания коллекторов (данные в движении), settle и «новых данных» не требует.
+    manual = await dedup_requests.has_pending(pool) and snap.active_collectors == 0
+    if manual:
+        go, why = True, "ручной запуск из админки"
+    else:
+        go, why = decide(snap, st)
     if not go:
         logger.debug(f"DEDUP_SERVICE_WAIT | {why}")
         return None
+    req = None
     async with try_lock(pool) as got:
         if not got:
             logger.info("DEDUP_SERVICE_BUSY | другой прогон дедупликации уже идёт (ручной запуск?) — пропускаю такт")
             return None
-        logger.info(f"DEDUP_SERVICE_RUN | method={method} | reason={why}")
-        res = await run_dedup(pool, client, cfg, method=method)
+        if manual:
+            req = await dedup_requests.claim(pool)
+        logger.info(f"DEDUP_SERVICE_RUN | method={method} | reason={why}" + (f" | force={req['force']}" if req else ''))
+        try:
+            res = await run_dedup(pool, client, cfg, method=method, force=bool(req and req['force']))
+        except Exception as e:
+            if req:
+                await dedup_requests.finish(pool, req['id'], False, None, f"{type(e).__name__}: {e}")
+            raise
+    if req:
+        await dedup_requests.finish(pool, req['id'], res.status == 'ok', res.run_id, res.error)
     st_ = res.stats
     if res.status == 'ok':
         logger.info(f"DEDUP_SERVICE_DONE | status=ok | dates={st_.get('dates_processed')}/{st_.get('dates_total')} "
@@ -43,9 +59,11 @@ async def tick(pool, client, cfg: dict, st: ServiceSettings, *, now=None, send=N
                     f"| unhidden={st_.get('unhidden')} | bad_days={st_.get('bad_days')} | skipped_days={st_.get('skipped_days')}")
     else:
         logger.warning(f"DEDUP_SERVICE_DONE | status={res.status} | {res.error}")
-    if st.alerts:
+    if st.alerts or req:                  # ручной запуск отвечает админу всегда, даже при service.alerts: false
         send = send or notify.send_admin
-        texts = [notify.transition_text(snap.last_run_status, res.status, res.error, st)]
+        texts = [notify.transition_text(snap.last_run_status, res.status, res.error, st)] if st.alerts else []
+        if req:
+            texts.append(notify.manual_summary(res, method, bool(req['force'])))
         if res.status == 'ok':
             texts.append(notify.run_report(res, method))
         for t in texts:
@@ -85,6 +103,8 @@ async def main():
     closed = await close_interrupted_runs(pool)
     if closed:
         logger.warning(f"DEDUP_INTERRUPTED_RUNS_CLOSED | rows={closed}")
+    if await dedup_requests.close_interrupted(pool):
+        logger.warning("DEDUP_REQUEST_INTERRUPTED | ручной запуск прерван перезапуском сервиса")
     if cfg['method'] not in ('shadow', 'ai'):
         logger.warning("DEDUP_SERVICE_IDLE | deduplication.method=legacy: сервис простаивает (включи shadow или ai и перезапусти)")
     aud = audit_from_cfg(cfg)
@@ -94,7 +114,7 @@ async def main():
 
     tcfg = config['translation']
     tst = translation_settings(tcfg)
-    hook = TranslationHook(pool, client_from_config('translate', tcfg), tst)
+    hook = TranslationHook(pool, client_from_config('translate', tcfg), tst, send=notify.send_admin)
     dedup_on = cfg['method'] in ('shadow', 'ai')
     logger.info(f"Translation | method={tst.method} | sources={list(tst.sources)} | models={tcfg['models']} | "
                 f"upcoming_only={tst.only_upcoming} | key={'set' if tcfg['api_key'] else 'MISSING'}")

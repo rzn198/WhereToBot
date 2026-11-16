@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import re
-from datetime import datetime, timezone
+from datetime import datetime, time, timezone
 from zoneinfo import ZoneInfo
 
 import httpx
@@ -135,11 +135,17 @@ class TicketsRsScraper(BaseScraper):
                     logger.debug(f"TICKETSRS_DESC_ERROR | {item.source_url} | {e}")
                 # город / полное имя площадки
                 try:
-                    venue, town = await self._fetch_venue(client, item.source_url)
+                    data = await self._fetch_event_data(client, item.source_url)
+                    venue, town = self._venue_from(data)
                     if town:
                         item.city = town
                     if venue:
                         item.venue = venue   # полное имя из Get4Event лучше листингового
+                    # точное время сеанса: EventTime детальной страницы надёжнее, чем DateTime листинга
+                    # («...18h» или вовсе без времени)
+                    t = self._time_from_event(data)
+                    if t is not None:
+                        item.starts_time = t
                 except Exception as e:
                     logger.debug(f"TICKETSRS_VENUE_ERROR | {item.source_url} | {e}")
 
@@ -150,6 +156,32 @@ class TicketsRsScraper(BaseScraper):
 
     async def _fetch_venue(self, client, source_url: str):
         """web_Get4Event -> (venue_name, town)."""
+        return self._venue_from(await self._fetch_event_data(client, source_url))
+
+    @staticmethod
+    def _venue_from(data) -> tuple[str | None, str | None]:
+        if not isinstance(data, dict):
+            return None, None
+        venue = data.get("Venue") or {}
+        if not isinstance(venue, dict):
+            return None, None
+        return venue.get("Name") or None, venue.get("Town") or None
+
+    @staticmethod
+    def _time_from_event(data) -> time | None:
+        """EventTime детальной страницы ('2026-11-22T12:00:00') -> время. 00:00 = времени нет (заглушка сайта)."""
+        if not isinstance(data, dict):
+            return None
+        m = re.search(r"T(\d{2}):(\d{2})", str(data.get("EventTime") or ""))
+        if not m:
+            return None
+        h, mi = int(m.group(1)), int(m.group(2))
+        if h > 23 or mi > 59 or (h == 0 and mi == 0):
+            return None
+        return time(h, mi)
+
+    async def _fetch_event_data(self, client, source_url: str):
+        """web_Get4Event -> data (dict) или None."""
         slug = source_url.rstrip("/").split("/")[-1]
         payload = {
             "JSONParams": {
@@ -162,16 +194,8 @@ class TicketsRsScraper(BaseScraper):
         }
         r = await client.post(API, json=payload)
         r.raise_for_status()
-        d = r.json()
-        data = d.get("data")
-        if not isinstance(data, dict):
-            return None, None
-        venue = data.get("Venue") or {}
-        if not isinstance(venue, dict):
-            return None, None
-        name = venue.get("Name") or None
-        town = venue.get("Town") or None
-        return name, town
+        data = r.json().get("data")
+        return data if isinstance(data, dict) else None
 
     async def _fetch_description(self, client, source_url: str) -> str | None:
         """web__Get_PageConfig -> HTML-описание из Layout (устойчивый поиск)."""
@@ -313,6 +337,8 @@ class TicketsRsScraper(BaseScraper):
         images = [ev["ImgSrc"]] if ev.get("ImgSrc") else []
 
         museum = museum_rule(title)
+        tm = _TIME_RE.search(str(ev.get("DateTime") or ""))
+        listing_time = time(starts_at.hour, starts_at.minute) if tm and (starts_at.hour or starts_at.minute) else None
         return EventItem(
             source=self.source,
             source_url=source_url,
@@ -326,6 +352,7 @@ class TicketsRsScraper(BaseScraper):
             images=images,
             dedup_key=build_dedup_key(title, starts_at, None),
             label_rule=museum,
+            starts_time=listing_time,
         )
 
     def _parse_dt(self, iso_date, datetime_str) -> datetime | None:

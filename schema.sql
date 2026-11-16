@@ -145,6 +145,7 @@ CREATE TABLE IF NOT EXISTS public.events (
     image_file_id  text          NULL,
     description_ru text          NULL,
     hidden_by_admin boolean      NOT NULL DEFAULT FALSE,
+    starts_time    time          NULL,
     CONSTRAINT events_pkey PRIMARY KEY (id),
     CONSTRAINT uq_events_source_url UNIQUE (source_url)
 );
@@ -383,3 +384,18 @@ CREATE TABLE IF NOT EXISTS push_log (
     PRIMARY KEY (push_date, user_id)
 );
 CREATE INDEX IF NOT EXISTS idx_push_log_user_status ON push_log (user_id, status, push_date);
+
+-- Запросы на ручной запуск дедупликатора из админки (см. migrations/016_dedup_requests.sql)
+CREATE TABLE IF NOT EXISTS dedup_requests (
+    id            BIGSERIAL    PRIMARY KEY,
+    requested_at  TIMESTAMPTZ  NOT NULL DEFAULT now(),
+    requested_by  BIGINT,
+    force         BOOLEAN      NOT NULL DEFAULT false,
+    status        TEXT         NOT NULL DEFAULT 'pending'
+                               CHECK (status IN ('pending', 'running', 'done', 'failed', 'cancelled')),
+    started_at    TIMESTAMPTZ,
+    finished_at   TIMESTAMPTZ,
+    run_id        BIGINT       REFERENCES dedup_runs (id) ON DELETE SET NULL,
+    error         TEXT
+);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_dedup_requests_open ON dedup_requests ((true)) WHERE status IN ('pending', 'running');

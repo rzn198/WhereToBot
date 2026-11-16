@@ -31,9 +31,9 @@ _UPSERT_SQL = f"""
 INSERT INTO {EVENTS_TABLE} (
     source, source_url, title, description,
     starts_at, venue, city, country,
-    images, dedup_key, event_types, hidden_by_admin
+    images, dedup_key, event_types, hidden_by_admin, starts_time
 ) VALUES (
-    $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12
+    $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13
 )
 -- hidden_by_admin ниже намеренно НЕ входит в DO UPDATE: правило автоскрытия действует только при вставке,
 -- ручное решение админа и решения дедупликатора при повторном сохранении не затираются.
@@ -41,6 +41,7 @@ ON CONFLICT (source_url) DO UPDATE SET
     title          = EXCLUDED.title,
     description    = {_NEW_DESC.format(t=EVENTS_TABLE)},
     starts_at      = EXCLUDED.starts_at,
+    starts_time    = EXCLUDED.starts_time,
     venue          = COALESCE(EXCLUDED.venue, {EVENTS_TABLE}.venue),
     city           = COALESCE(EXCLUDED.city, {EVENTS_TABLE}.city),
     country        = COALESCE(EXCLUDED.country, {EVENTS_TABLE}.country),
@@ -57,13 +58,15 @@ ON CONFLICT (source_url) DO UPDATE SET
 WHERE (
     {EVENTS_TABLE}.title, {EVENTS_TABLE}.description, {EVENTS_TABLE}.starts_at,
     {EVENTS_TABLE}.venue, {EVENTS_TABLE}.city, {EVENTS_TABLE}.country,
-    {EVENTS_TABLE}.images, {EVENTS_TABLE}.dedup_key, {EVENTS_TABLE}.event_types
+    {EVENTS_TABLE}.images, {EVENTS_TABLE}.dedup_key, {EVENTS_TABLE}.event_types,
+    {EVENTS_TABLE}.starts_time
 ) IS DISTINCT FROM (
     EXCLUDED.title, {_NEW_DESC.format(t=EVENTS_TABLE)}, EXCLUDED.starts_at,
     COALESCE(EXCLUDED.venue, {EVENTS_TABLE}.venue),
     COALESCE(EXCLUDED.city, {EVENTS_TABLE}.city),
     COALESCE(EXCLUDED.country, {EVENTS_TABLE}.country),
-    {_NEW_IMG.format(t=EVENTS_TABLE)}, EXCLUDED.dedup_key, {_NEW_TYPES.format(t=EVENTS_TABLE)}
+    {_NEW_IMG.format(t=EVENTS_TABLE)}, EXCLUDED.dedup_key, {_NEW_TYPES.format(t=EVENTS_TABLE)},
+    EXCLUDED.starts_time
 )
 RETURNING (xmax = 0) AS inserted
 """
@@ -113,6 +116,7 @@ async def save_events(pool, items: list[EventItem]) -> int:
                     it.dedup_key,
                     normalize_categories(it.event_types),
                     bool(it.auto_hide_reason),
+                    it.starts_time,
                 )
                 if row is None:
                     unchanged += 1
