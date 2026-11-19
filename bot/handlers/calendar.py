@@ -6,6 +6,7 @@ from telegram.ext import ContextTypes
 from db.tables import Tables
 from bot.handlers.contact import _edit_contact_window
 from bot.handlers.events import EVENTS_CITY
+from shared.tz import belgrade_today
 
 MONTHS_RU = [
     '', 'Январь', 'Февраль', 'Март', 'Апрель', 'Май', 'Июнь',
@@ -23,7 +24,7 @@ def month_carousel(year: int, month: int, dates, max_date: date) -> dict:
     Возвращает {'prev': ((год, месяц), замыкание?), 'next': (...)}; None — других месяцев нет (стрелка с подсказкой).
     «Назад» из самого раннего месяца открывает самый дальний, «вперёд» из самого дальнего — самый ранний.
     """
-    today = date.today()
+    today = belgrade_today()
     months = sorted({(d.year, d.month) for d in dates if today <= d <= max_date})
     cur = (year, month)
     if not months:
@@ -96,7 +97,7 @@ def build_calendar(
     nav_prefix: str,
 ) -> list:
     """Календарь месяца: дни недели, недели и под ними кнопки соседних месяцев (по кругу) с названием месяца."""
-    today = date.today()
+    today = belgrade_today()
     rows = [[InlineKeyboardButton(d, callback_data=NOOP) for d in ['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс']]]
     for week in calendar.monthcalendar(year, month):
         row = []
@@ -167,7 +168,7 @@ def build_range_calendar(
                               на активный день начинает выбор заново; кнопок месяцев нет.
     Всё нужное для обработки лежит в callback_data кнопки, состояние бота не хранится (переживает перезапуск).
     """
-    today = date.today()
+    today = belgrade_today()
     lo = start
     hi = end or start
     selecting = start is not None
@@ -209,7 +210,7 @@ async def handle_calendar(
     await query.answer()
 
     pool = context.bot_data.get('pool')
-    today = date.today()
+    today = belgrade_today()
     context.user_data['calendar_year'] = today.year
     context.user_data['calendar_month'] = today.month
 
@@ -223,8 +224,8 @@ async def handle_calendar_nav(
     query = update.callback_query
 
     pool = context.bot_data.get('pool')
-    year = context.user_data.get('calendar_year', date.today().year)
-    month = context.user_data.get('calendar_month', date.today().month)
+    year = context.user_data.get('calendar_year', belgrade_today().year)
+    month = context.user_data.get('calendar_month', belgrade_today().month)
     target = parse_nav_target(query.data.split(':')[1:], year, month)
     if target is None:
         await query.answer('Неверный запрос', show_alert=True)
@@ -246,8 +247,8 @@ async def _show_calendar(
     chat_id = update.effective_chat.id
     menu_message_id = context.user_data.get('menu_message_id')
 
-    year = context.user_data.get('calendar_year', date.today().year)
-    month = context.user_data.get('calendar_month', date.today().month)
+    year = context.user_data.get('calendar_year', belgrade_today().year)
+    month = context.user_data.get('calendar_month', belgrade_today().month)
 
     # дни, в которые есть посты каналов или события сайтов (Белград)
     row = await pool.fetchrow(f"""
@@ -258,18 +259,18 @@ async def _show_calendar(
                 SELECT date AS d
                 FROM {Tables.MESSAGES}
                 WHERE date IS NOT NULL
-                AND date >= CURRENT_DATE
+                AND date >= (now() AT TIME ZONE 'Europe/Belgrade')::date
                 AND hidden_by_admin = FALSE
                 UNION ALL
                 SELECT starts_at
                 FROM {Tables.EVENTS}
-                WHERE starts_at >= CURRENT_DATE
+                WHERE starts_at >= (now() AT TIME ZONE 'Europe/Belgrade')::date
                 AND city = $1
                 AND hidden_by_admin = FALSE
             ) t
         """, EVENTS_CITY)
     dates_with_events = set(row['dates'] or [])
-    max_date = row['max_date'] if row and row['max_date'] else date.today()
+    max_date = row['max_date'] if row and row['max_date'] else belgrade_today()
 
     keyboard = build_calendar(
         year=year,

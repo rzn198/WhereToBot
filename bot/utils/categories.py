@@ -65,16 +65,16 @@ def horizon_days() -> int:
 
 # Будущие посты каналов: от сегодня до горизонта, не скрытые админом и не скрытые пользователем.
 MESSAGES_FUTURE = f"""
-    date >= CURRENT_DATE
-    AND date <= CURRENT_DATE + make_interval(days => $3)
+    date >= (now() AT TIME ZONE 'Europe/Belgrade')::date
+    AND date <= (now() AT TIME ZONE 'Europe/Belgrade')::date + make_interval(days => $3)
     AND hidden_by_admin = FALSE
     AND surrogate_id NOT IN (SELECT msg_id FROM {Tables.HIDDEN_EVENTS} WHERE user_id = $1)
 """
 
 # Будущие события сайтов: только выбранный город, не скрытые админом (дубли) и не скрытые пользователем.
 EVENTS_FUTURE = f"""
-    starts_at >= CURRENT_DATE
-    AND starts_at <= CURRENT_DATE + make_interval(days => $3)
+    starts_at >= (now() AT TIME ZONE 'Europe/Belgrade')::date
+    AND starts_at <= (now() AT TIME ZONE 'Europe/Belgrade')::date + make_interval(days => $3)
     AND city = $2
     AND hidden_by_admin = FALSE
     AND id NOT IN (SELECT event_id FROM {Tables.EVENT_HIDDEN} WHERE user_id = $1)
@@ -120,6 +120,29 @@ def category_dates_sql() -> str:
             SELECT starts_at FROM {Tables.EVENTS}
             WHERE {EVENTS_FUTURE} AND event_types && $4::text[]
         ) t
+    """
+
+
+def window_rows_sql() -> str:
+    """Строки окна категории за период: те же условия и порядок, что у feed_sql(period=True), плюс поля для строки списка.
+    $4 — массив названий категории, $5 и $6 — первый и последний день включительно (один день: $5 = $6).
+    Один запрос на показ окна. Текст поста берём только начало: полный текст в списке не нужен.
+    LEFT JOIN card_lines добавляет ИИ-строку записи (ai_title, ai_attr, ai_profile), если она есть."""
+    return f"""
+        SELECT u.kind, u.id, u.d, u.title, u.venue, u.tm,
+               cl.short_title AS ai_title, cl.attr AS ai_attr, cl.profile AS ai_profile
+        FROM (
+            SELECT 0 AS ord, 'm' AS kind, surrogate_id AS id, date AS d, created_at AS c,
+                   left(text, 400) AS title, NULL::text AS venue, NULL::time AS tm
+            FROM {Tables.MESSAGES}
+            WHERE {MESSAGES_FUTURE} AND event_types && $4::text[] AND date BETWEEN $5::date AND $6::date
+            UNION ALL
+            SELECT 1, 'e', id, starts_at, created_at, title, venue, starts_time
+            FROM {Tables.EVENTS}
+            WHERE {EVENTS_FUTURE} AND event_types && $4::text[] AND starts_at BETWEEN $5::date AND $6::date
+        ) u
+        LEFT JOIN {Tables.CARD_LINES} cl ON cl.kind = u.kind AND cl.ref_id = u.id
+        ORDER BY u.d, u.ord, u.c, u.id
     """
 
 

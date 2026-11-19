@@ -29,12 +29,14 @@ def get_event_nav_keyboard(
     is_admin: bool = False,
     under_review: bool = False,
     reviewed: bool = False,
+    list_back: str | None = None,
 ) -> InlineKeyboardMarkup:
     """Кнопки карточки.
 
     category_code — код категории, из ленты которой открыта карточка: появляется кнопка «К категории».
     calendar_back — callback_data кнопки «К календарю» (лента за день или период из календаря категории).
     event_date    — дата события: над стрелками показывается некликабельная кнопка с датой.
+    list_back     — callback_data кнопки «К списку» (карточка открыта из окна категории).
     is_admin      — админу добавляется кнопка пересмотра («На пересмотре» / «Пересмотрено» — неактивные).
     """
     fav_btn = InlineKeyboardButton(
@@ -73,6 +75,9 @@ def get_event_nav_keyboard(
         else:
             review_btn = InlineKeyboardButton('🔎 Пересмотр', callback_data=f'rv:open:{surrogate_id}')
         rows.append([review_btn])
+
+    if list_back:
+        rows.append([InlineKeyboardButton('📋 К списку', callback_data=list_back)])
 
     if category_code and calendar_back:
         rows.append([

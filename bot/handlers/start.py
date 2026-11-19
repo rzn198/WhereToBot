@@ -4,7 +4,9 @@ from telegram.ext import ContextTypes
 from telegram.error import TelegramError
 from bot.keyboards.main_menu import get_main_menu_inline, MENU_TEXT
 from bot.handlers.events import EVENTS_CITY
+from bot.handlers.category_window import open_window_card
 from bot.handlers.push_links import open_favorite_card, parse_start_payload
+from bot.utils.links import parse_window_payload
 from bot.middleware.stats import update_user_stats
 from bot.utils.categories import load_menu_counts
 from bot.utils.messenger import edit_or_send
@@ -22,6 +24,15 @@ async def handle_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         # ссылка поста из пуша (/start fav_<id>): открываем карточку в избранном
         await open_favorite_card(update, context, card_ref)
         return
+    args = getattr(context, 'args', None) or []
+    window_card = parse_window_payload(args[0]) if len(args) == 1 else None
+    if window_card is not None:
+        # ссылка строки из окна категории (/start cw_...): карточка в том же списке
+        try:
+            if await open_window_card(update, context, *window_card):
+                return
+        except Exception as e:                      # битая ссылка или сбой БД не должны оставить пользователя без меню
+            logger.exception(f"START_WINDOW_LINK_FAILED | {type(e).__name__}: {e}")
     menu_message_id = context.user_data.get('menu_message_id')
     context.user_data.clear()
     if menu_message_id:

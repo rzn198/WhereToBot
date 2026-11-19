@@ -399,3 +399,26 @@ CREATE TABLE IF NOT EXISTS dedup_requests (
     error         TEXT
 );
 CREATE UNIQUE INDEX IF NOT EXISTS uq_dedup_requests_open ON dedup_requests ((true)) WHERE status IN ('pending', 'running');
+
+-- Настройки бота из админки (см. migrations/018_bot_settings.sql)
+CREATE TABLE IF NOT EXISTS bot_settings (
+    key         TEXT         PRIMARY KEY,
+    value       TEXT         NOT NULL,
+    updated_at  TIMESTAMPTZ  NOT NULL DEFAULT now(),
+    updated_by  BIGINT
+);
+
+-- ИИ-строки списка категорий (см. migrations/019_card_lines.sql)
+CREATE TABLE IF NOT EXISTS card_lines (
+    kind            CHAR(1)      NOT NULL CHECK (kind IN ('m', 'e')),
+    ref_id          BIGINT       NOT NULL,
+    short_title     TEXT         NOT NULL,
+    attr            TEXT,                         -- значение атрибута профиля (жанр и т.п.); NULL = модель не уверена
+    profile         TEXT         NOT NULL,        -- профиль (основная категория записи), по которому строка сгенерирована
+    src_hash        TEXT         NOT NULL,
+    model           TEXT,
+    prompt_version  TEXT         NOT NULL,
+    created_at      TIMESTAMPTZ  NOT NULL DEFAULT now(),
+    updated_at      TIMESTAMPTZ  NOT NULL DEFAULT now(),
+    PRIMARY KEY (kind, ref_id)
+);

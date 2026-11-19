@@ -21,6 +21,8 @@ from bot.utils.categories import (
     MAIN_MENU_CODES, category_dates_sql, counts_sql, get_category, horizon_days, period_count_sql, rest_categories,
 )
 from bot.utils.messenger import edit_or_send
+from db.settings import resolve_category_mode
+from shared.tz import belgrade_today
 
 MENU_TEXT = '🗂 Выберите категорию:'
 EMPTY_TEXT = 'Пока нет событий по категориям 🤷'
@@ -104,16 +106,31 @@ async def handle_category(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
     await query.answer()
     await update_user_stats(pool, update)
-    logger.info(f"CATEGORY | user_id={update.effective_user.id} | code={code}")
+    mode = await resolve_category_mode(pool, update.effective_user.id)
+    logger.info(f"CATEGORY | user_id={update.effective_user.id} | code={code} | mode={mode}")
+    if mode == 'window':
+        # режим window: категория сразу открывает список на сегодня; «Сегодня / Завтра / На дату» внизу того же экрана
+        from bot.handlers.category_window import try_show_window
+        today = belgrade_today()
+        if await try_show_window(update, context, code, today, today):
+            return
+    # режим cards (или аварийный откат окна): окно выбора дня, как раньше
     await _render_window(update, context, code)
 
 
-async def _open_filter(update: Update, context: ContextTypes.DEFAULT_TYPE, filter_name: str) -> bool:
-    """Открыть ленту по фильтру категории. False — событий нет (ничего не меняем, окно остаётся)."""
+async def _open_filter(update: Update, context: ContextTypes.DEFAULT_TYPE, filter_name: str, force_cards: bool = False) -> bool:
+    """Открыть день или период категории. Режим window: список-окно (пустой день тоже показывается окном, True).
+    Режим cards или ошибка окна: карточки; False — событий нет (ничего не меняем, окно выбора дня остаётся)."""
+    from bot.handlers.category_window import parse_cat_filter, try_show_window
     from bot.handlers.events import load_event_ids
 
     pool = context.bot_data.get('pool')
     user_id = update.effective_user.id
+    parsed = None if force_cards else parse_cat_filter(filter_name)
+    if parsed and await resolve_category_mode(pool, user_id) == 'window':
+        if await try_show_window(update, context, *parsed):
+            return True
+    context.user_data.pop('window_filter', None)
     event_ids = await load_event_ids(pool, user_id, filter_name)
     logger.info(f"CATEGORY_FEED | user_id={user_id} | filter={filter_name} | items={len(event_ids)}")
     if not event_ids:
@@ -140,7 +157,7 @@ async def handle_category_day(update: Update, context: ContextTypes.DEFAULT_TYPE
         await query.answer('Неверный запрос', show_alert=True)
         return
     code, which = parts[1], parts[2]
-    day = date.today() + timedelta(days=1 if which == 'tomorrow' else 0)
+    day = belgrade_today() + timedelta(days=1 if which == 'tomorrow' else 0)
     if not await _open_day(update, context, code, day):
         await query.answer('На этот день в категории событий нет', show_alert=True)
         return
@@ -176,13 +193,13 @@ async def _show_category_calendar(
         year, month = start.year, start.month
         context.user_data['calendar_year'], context.user_data['calendar_month'] = year, month
     else:
-        year = context.user_data.get('calendar_year', date.today().year)
-        month = context.user_data.get('calendar_month', date.today().month)
+        year = context.user_data.get('calendar_year', belgrade_today().year)
+        month = context.user_data.get('calendar_month', belgrade_today().month)
 
     row = await pool.fetchrow(
         category_dates_sql(), user_id, EVENTS_CITY, horizon_days(), list(category.db_values))
     active = set(row['dates'] or [])
-    max_date = row['max_date'] if row and row['max_date'] else date.today()
+    max_date = row['max_date'] if row and row['max_date'] else belgrade_today()
 
     keyboard = build_range_calendar(
         year=year, month=month, active=active, max_date=max_date, code=code, start=start, end=end,
@@ -314,7 +331,7 @@ async def handle_category_calendar(update: Update, context: ContextTypes.DEFAULT
         await query.answer('Неизвестная категория', show_alert=True)
         return
     await query.answer()
-    today = date.today()
+    today = belgrade_today()
     context.user_data['calendar_year'] = today.year
     context.user_data['calendar_month'] = today.month
     await _show_category_calendar(update, context, code)
@@ -324,8 +341,8 @@ async def handle_category_calendar_nav(update: Update, context: ContextTypes.DEF
     """Листание месяцев по кругу: catcal_nav:<code>:<ГГГГ-ММ>[:wp|wn] (прежние prev|next тоже понимаем)."""
     query = update.callback_query
     parts = query.data.split(':')
-    year = context.user_data.get('calendar_year', date.today().year)
-    month = context.user_data.get('calendar_month', date.today().month)
+    year = context.user_data.get('calendar_year', belgrade_today().year)
+    month = context.user_data.get('calendar_month', belgrade_today().month)
     target = parse_nav_target(parts[2:], year, month) if len(parts) >= 3 else None
     if target is None or get_category(parts[1]) is None:
         await query.answer('Неверный запрос', show_alert=True)

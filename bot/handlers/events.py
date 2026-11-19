@@ -16,10 +16,11 @@ from bot.utils.refs import Ref, event_ref, is_event_ref, ref_id
 from bot.middleware.stats import update_user_stats
 from bot.utils.messenger import edit_or_send
 from shared.config import config
+from shared.tz import belgrade_today
 
 
 def get_date_range(filter_name: str) -> tuple[date, date]:
-    today = date.today()
+    today = belgrade_today()
     if filter_name == 'today':
         return today, today
     elif filter_name == 'tomorrow':
@@ -57,7 +58,7 @@ async def load_event_ids(
                 JOIN {Tables.FAVORITES} f ON f.msg_id = m.surrogate_id
                 WHERE f.user_id = $1
                 AND m.hidden_by_admin = FALSE
-                AND (m.date IS NULL OR m.date >= CURRENT_DATE)
+                AND (m.date IS NULL OR m.date >= (now() AT TIME ZONE 'Europe/Belgrade')::date)
                 AND m.surrogate_id NOT IN (
                     SELECT msg_id FROM {Tables.HIDDEN_EVENTS} WHERE user_id = $1
                 )
@@ -67,7 +68,7 @@ async def load_event_ids(
                 JOIN {Tables.EVENT_FAVORITES} ef ON ef.event_id = e.id
                 WHERE ef.user_id = $1
                 AND e.hidden_by_admin = FALSE
-                AND e.starts_at >= CURRENT_DATE
+                AND e.starts_at >= (now() AT TIME ZONE 'Europe/Belgrade')::date
                 AND e.id NOT IN (
                     SELECT event_id FROM {Tables.EVENT_HIDDEN} WHERE user_id = $1
                 )
@@ -212,6 +213,20 @@ def _calendar_back_data(current_filter: str) -> str | None:
     return None
 
 
+def _list_back_data(context, current_filter: str) -> str | None:
+    """Кнопка «К списку» у карточки, открытой из окна категории: wl:<code>:<ISO>:<ISO>:<страница с этой карточкой>."""
+    if not current_filter or context.user_data.get('window_filter') != current_filter:
+        return None
+    from bot.handlers.category_window import parse_cat_filter
+    from bot.utils.window import window_settings
+    parsed = parse_cat_filter(current_filter)
+    if parsed is None:
+        return None
+    code, first, last = parsed
+    page = int(context.user_data.get('current_index') or 0) // window_settings().page_size + 1
+    return f'wl:{code}:{first.isoformat()}:{last.isoformat()}:{page}'
+
+
 async def show_current_event(
     update: Update,
     context: ContextTypes.DEFAULT_TYPE,
@@ -258,6 +273,7 @@ async def show_current_event(
     current_filter = str(context.user_data.get('current_filter', ''))
     category_code = current_filter[4:].split(':', 1)[0] if current_filter.startswith('cat:') else None
     calendar_back = _calendar_back_data(current_filter)
+    list_back = _list_back_data(context, current_filter)
     is_admin = user_id == config['telegram']['admin_user_id']
     under_review = reviewed = False
     if is_admin:
@@ -279,6 +295,7 @@ async def show_current_event(
             is_admin=is_admin,
             under_review=under_review,
             reviewed=reviewed,
+            list_back=list_back,
         )
         await edit_or_send(
             context=context,
@@ -343,6 +360,7 @@ async def show_current_event(
         is_admin=is_admin,
         under_review=under_review,
         reviewed=reviewed,
+        list_back=list_back,
     )
 
     await edit_or_send(
