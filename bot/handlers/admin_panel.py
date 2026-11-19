@@ -10,6 +10,7 @@ from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton
 from telegram.error import TelegramError
 from telegram.ext import ContextTypes
 from shared.config import config
+from shared.tz import belgrade_today
 from db.tables import Tables
 from shared.constants import (
     ALERT_PREVIEW_LENGTH,
@@ -55,6 +56,7 @@ async def handle_admin_panel(
         [InlineKeyboardButton('📢 Алерт', callback_data='admin_panel:alert')],
         [InlineKeyboardButton('📨 Предпросмотр пуша', callback_data='admin_panel:push_preview')],
         [InlineKeyboardButton('🧩 Запуск дедупа', callback_data='ddr:menu')],
+        [InlineKeyboardButton('🪟 Режим категорий', callback_data='uim:menu')],
         [InlineKeyboardButton('✏️ Новое сообщение', callback_data='admin_panel:new_event')],
         [InlineKeyboardButton('📤 Выгрузка пересмотров', callback_data='rvx:menu')],
         [InlineKeyboardButton('⭐ Перенос избранного (CSV)', callback_data='fvx:get')],
@@ -225,7 +227,7 @@ async def handle_admin_hidden_events(
     if not await _require_admin(update):
         return
 
-    today = date.today()
+    today = belgrade_today()
     context.user_data['admin_hidden_year'] = today.year
     context.user_data['admin_hidden_month'] = today.month
 
@@ -240,8 +242,8 @@ async def _show_admin_hidden_calendar(
     chat_id = update.effective_chat.id
     menu_message_id = context.user_data.get('menu_message_id')
 
-    year = context.user_data.get('admin_hidden_year', date.today().year)
-    month = context.user_data.get('admin_hidden_month', date.today().month)
+    year = context.user_data.get('admin_hidden_year', belgrade_today().year)
+    month = context.user_data.get('admin_hidden_month', belgrade_today().month)
 
     # скрытые тоже: админ ищет именно их. События сайтов — те же, что видят пользователи (Белград)
     row = await pool.fetchrow(f"""
@@ -250,14 +252,14 @@ async def _show_admin_hidden_calendar(
                 MAX(d) as max_date
             FROM (
                 SELECT date AS d FROM {Tables.MESSAGES}
-                WHERE date IS NOT NULL AND date >= CURRENT_DATE
+                WHERE date IS NOT NULL AND date >= (now() AT TIME ZONE 'Europe/Belgrade')::date
                 UNION ALL
                 SELECT starts_at FROM {Tables.EVENTS}
-                WHERE starts_at >= CURRENT_DATE AND city = $1
+                WHERE starts_at >= (now() AT TIME ZONE 'Europe/Belgrade')::date AND city = $1
             ) t
         """, EVENTS_CITY)
     dates_with_events = set(row['dates'] or [])
-    max_date = row['max_date'] if row and row['max_date'] else date.today()
+    max_date = row['max_date'] if row and row['max_date'] else belgrade_today()
 
     keyboard = build_calendar(
         year=year,
@@ -285,8 +287,8 @@ async def handle_admin_hidden_nav(
     query = update.callback_query
 
     parts = query.data.split(':')
-    year = context.user_data.get('admin_hidden_year', date.today().year)
-    month = context.user_data.get('admin_hidden_month', date.today().month)
+    year = context.user_data.get('admin_hidden_year', belgrade_today().year)
+    month = context.user_data.get('admin_hidden_month', belgrade_today().month)
     target = parse_nav_target(parts[1:], year, month)
     if target is None:
         await query.answer()

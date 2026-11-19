@@ -87,6 +87,8 @@ from bot.handlers.calendar import (
 from bot.handlers.reviews import handle_review, handle_review_text
 from bot.handlers.review_export import handle_fav_moves_export, handle_review_export
 from bot.handlers.admin_dedup_run import handle_dedup_run
+from bot.handlers.admin_ui_mode import handle_ui_mode
+from bot.handlers.category_window import handle_window_list
 from bot.handlers.unnamed import handle_unnamed, handle_unnamed_text
 from bot.handlers.categories import (
     handle_categories_menu,
@@ -213,6 +215,7 @@ async def main():
     app.add_handler(CallbackQueryHandler(handle_categories_menu, pattern='^cats:menu$'))
     app.add_handler(CallbackQueryHandler(handle_category, pattern='^cat:[a-z_]+$'))
     app.add_handler(CallbackQueryHandler(handle_category_day, pattern='^catd:'))
+    app.add_handler(CallbackQueryHandler(handle_window_list, pattern='^wl:'))
     app.add_handler(CallbackQueryHandler(handle_category_calendar, pattern='^catcal:'))
     app.add_handler(CallbackQueryHandler(handle_category_calendar_nav, pattern='^catcal_nav:'))
     app.add_handler(CallbackQueryHandler(handle_category_pick, pattern='^catpick:'))
@@ -224,6 +227,7 @@ async def main():
     app.add_handler(CallbackQueryHandler(handle_unnamed, pattern='^un:'))
     app.add_handler(CallbackQueryHandler(handle_review_export, pattern='^rvx:'))
     app.add_handler(CallbackQueryHandler(handle_dedup_run, pattern='^ddr:'))
+    app.add_handler(CallbackQueryHandler(handle_ui_mode, pattern='^uim:'))
     app.add_handler(CallbackQueryHandler(handle_fav_moves_export, pattern='^fvx:'))
 
     app.add_handler(CallbackQueryHandler(handle_navigation, pattern='^nav:'))

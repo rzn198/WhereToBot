@@ -183,13 +183,13 @@ def no_category_queue_sql() -> str:
         SELECT kind, id FROM (
             SELECT 0 AS ord, 'm' AS kind, m.surrogate_id AS id, m.date AS d, m.created_at AS c
             FROM {Tables.MESSAGES} m
-            WHERE COALESCE(cardinality(m.event_types), 0) = 0 AND m.date >= CURRENT_DATE AND NOT m.hidden_by_admin
+            WHERE COALESCE(cardinality(m.event_types), 0) = 0 AND m.date >= (now() AT TIME ZONE 'Europe/Belgrade')::date AND NOT m.hidden_by_admin
               AND NOT EXISTS (SELECT 1 FROM {Tables.EVENT_REVIEWS} r
                               WHERE r.flow = 'no_category' AND r.message_id = m.surrogate_id)
             UNION ALL
             SELECT 1, 'e', e.id, e.starts_at, e.created_at
             FROM {Tables.EVENTS} e
-            WHERE COALESCE(cardinality(e.event_types), 0) = 0 AND e.starts_at >= CURRENT_DATE
+            WHERE COALESCE(cardinality(e.event_types), 0) = 0 AND e.starts_at >= (now() AT TIME ZONE 'Europe/Belgrade')::date
               AND NOT e.hidden_by_admin AND e.city = $1
               AND NOT EXISTS (SELECT 1 FROM {Tables.EVENT_REVIEWS} r
                               WHERE r.flow = 'no_category' AND r.event_id = e.id)

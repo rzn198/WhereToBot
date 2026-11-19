@@ -11,6 +11,7 @@ from db.tables import Tables
 from bot.handlers.contact import escape_md
 from bot.utils.messenger import edit_or_send
 from shared.constants import MOVIE_DESC_SHORT_DISPLAY_LENGTH, MOVIE_DESC_FULL_DISPLAY_LENGTH
+from shared.tz import belgrade_today
 
 BELGRADE_TZ = ZoneInfo('Europe/Belgrade')
 
@@ -129,9 +130,9 @@ async def handle_cinema_filter(
     filter_type = parts[1]
 
     if filter_type == 'today':
-        target_date = str(date.today())
+        target_date = str(belgrade_today())
     elif filter_type == 'tomorrow':
-        target_date = str(date.today() + timedelta(days=1))
+        target_date = str(belgrade_today() + timedelta(days=1))
     elif filter_type == 'date' and len(parts) > 2:
         target_date = parts[2]
     else:
@@ -424,7 +425,7 @@ async def handle_cinema_calendar(
     await query.answer()
 
     pool = context.bot_data.get('pool')
-    today = date.today()
+    today = belgrade_today()
     context.user_data['cinema_calendar_year'] = today.year
     context.user_data['cinema_calendar_month'] = today.month
 
@@ -440,8 +441,8 @@ async def handle_cinema_calendar_nav(
     query = update.callback_query
 
     pool = context.bot_data.get('pool')
-    year = context.user_data.get('cinema_calendar_year', date.today().year)
-    month = context.user_data.get('cinema_calendar_month', date.today().month)
+    year = context.user_data.get('cinema_calendar_year', belgrade_today().year)
+    month = context.user_data.get('cinema_calendar_month', belgrade_today().month)
     target = parse_nav_target(query.data.split(':')[1:], year, month)
     if target is None:
         await query.answer()
@@ -464,19 +465,19 @@ async def _show_cinema_calendar(
 
     chat_id = update.effective_chat.id
 
-    year = context.user_data.get('cinema_calendar_year', date.today().year)
-    month = context.user_data.get('cinema_calendar_month', date.today().month)
+    year = context.user_data.get('cinema_calendar_year', belgrade_today().year)
+    month = context.user_data.get('cinema_calendar_month', belgrade_today().month)
 
     row = await pool.fetchrow(f"""
         SELECT
             array_agg(DISTINCT DATE(showtime AT TIME ZONE 'Europe/Belgrade')) as dates,
             MAX(DATE(showtime AT TIME ZONE 'Europe/Belgrade')) as max_date
         FROM {Tables.CINEMA_EVENTS}
-        WHERE DATE(showtime AT TIME ZONE 'Europe/Belgrade') >= CURRENT_DATE
+        WHERE DATE(showtime AT TIME ZONE 'Europe/Belgrade') >= (now() AT TIME ZONE 'Europe/Belgrade')::date
     """)
 
     dates_with_events = set(row['dates'] or [])
-    max_date = row['max_date'] if row and row['max_date'] else date.today()
+    max_date = row['max_date'] if row and row['max_date'] else belgrade_today()
 
     keyboard = build_calendar(
         year=year,

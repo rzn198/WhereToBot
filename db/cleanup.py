@@ -3,6 +3,7 @@ from loguru import logger
 
 from db import push_log
 from db.ai_seen import purge_old
+from db.card_lines import purge_orphans as purge_card_lines
 from db.event_ai_cache import purge_orphans
 from db.tables import Tables
 from event_collector.retention import get_window
@@ -120,6 +121,7 @@ async def run_cleanup(pool: asyncpg.Pool) -> dict:
 
     seen_purged = await purge_old(pool, int((config.get('parsing') or {}).get('seen_retention_days', 60)))
     event_cats = await purge_orphans(pool)
+    card_lines_purged = await purge_card_lines(pool)
     try:
         push_purged = await push_log.purge_old(pool)
     except Exception as e:
@@ -134,7 +136,7 @@ async def run_cleanup(pool: asyncpg.Pool) -> dict:
     logger.info(
         f"CLEANUP | dated={dated_count} | no_date={no_date_count} | "
         f"held_by_dup_refs={held_count} | alerts_detached={alerts_detached} | "
-        f"events={events_deleted} | ai_seen={seen_purged} | event_ai_categories={event_cats} | dedup_history={history} | push_log={push_purged}"
+        f"events={events_deleted} | ai_seen={seen_purged} | event_ai_categories={event_cats} | card_lines={card_lines_purged} | dedup_history={history} | push_log={push_purged}"
     )
 
     return {
@@ -145,5 +147,6 @@ async def run_cleanup(pool: asyncpg.Pool) -> dict:
         'events': events_deleted,
         'ai_seen': seen_purged,
         'event_ai_categories': event_cats,
+        'card_lines': card_lines_purged,
         'dedup_history': history,
     }

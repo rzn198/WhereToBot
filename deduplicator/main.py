@@ -18,6 +18,8 @@ from deduplicator.lock import try_lock
 from deduplicator.runner import run_dedup
 from deduplicator.schedule import ServiceSettings, close_interrupted_runs, decide, load_snapshot, service_settings
 from shared.ai import client_from_config
+from card_lines.service import CardLinesHook
+from card_lines.settings import card_line_settings
 from translator.service import TranslationHook, translation_settings
 
 
@@ -80,10 +82,11 @@ async def tick(pool, client, cfg: dict, st: ServiceSettings, *, now=None, send=N
     return res
 
 
-async def run_after_jobs(res, hook, reviews_job) -> int | None:
+async def run_after_jobs(res, hook, reviews_job, *extra_hooks) -> int | None:
     """Задачи, которые идут ПОСЛЕ остальных: чистка пересмотров — только когда в этом такте не было прогона
-    дедупликации (res is None) и перевод не работает. Если прогон или перевод идут, подождёт следующего такта."""
-    if res is not None or hook.running:
+    дедупликации (res is None) и перевод (и ИИ-строки списка, extra_hooks) не работают. Если прогон или перевод идут,
+    подождёт следующего такта."""
+    if res is not None or hook.running or any(h.running for h in extra_hooks):
         return None
     return await reviews_job.run_if_due()
 
@@ -116,6 +119,14 @@ async def main():
     tst = translation_settings(tcfg)
     hook = TranslationHook(pool, client_from_config('translate', tcfg), tst, send=notify.send_admin)
     dedup_on = cfg['method'] in ('shadow', 'ai')
+    clcfg = config['card_lines']
+    clst = card_line_settings(clcfg)
+    cl_hook = CardLinesHook(pool, client_from_config('card-lines', clcfg), clst, send=notify.send_admin)
+    logger.info(f"CardLines | method={clst.method} | models={clcfg['models']} | batch_size={clst.batch_size} | "
+                f"after_dedup={clst.after_dedup} | key={'set' if clcfg['api_key'] else 'MISSING'}")
+    if clst.enabled and clst.after_dedup and not dedup_on:
+        logger.warning("CARD_LINES_IDLE | ИИ-строки идут после дедупликатора: включи deduplication.method shadow или ai "
+                       "или поставь card_lines.after_dedup: false (тогда запуск только при старте сервиса)")
     logger.info(f"Translation | method={tst.method} | sources={list(tst.sources)} | models={tcfg['models']} | "
                 f"upcoming_only={tst.only_upcoming} | key={'set' if tcfg['api_key'] else 'MISSING'}")
     if tst.method != 'off' and not tst.sources:
@@ -124,20 +135,24 @@ async def main():
         logger.warning("TRANSLATE_IDLE | перевод идёт только после дедупликатора: включи deduplication.method shadow или ai")
     if dedup_on and tst.run_on_start:
         hook.trigger('start')
+    if clst.run_on_start and (dedup_on or not clst.after_dedup):
+        cl_hook.trigger('start')
 
     reviews_job = ReviewCleanupJob(pool, lambda: config.get('event_reviews') or {})
 
     try:
         while True:
             try:
-                res = await tick(pool, client, cfg, st, on_ok=lambda _res: hook.trigger('dedup_ok'))
+                res = await tick(pool, client, cfg, st, on_ok=lambda _res: (hook.trigger('dedup_ok'), cl_hook.trigger('dedup_ok')))
                 hook.poll()
-                await run_after_jobs(res, hook, reviews_job)
+                cl_hook.poll()
+                await run_after_jobs(res, hook, reviews_job, cl_hook)
             except Exception as e:
                 logger.exception(f"DEDUP_SERVICE_TICK_ERROR | {type(e).__name__}: {e}")
             await asyncio.sleep(st.poll_seconds)
     finally:
         await hook.aclose()
+        await cl_hook.aclose()
         await close_db_pool(pool)
         logger.info("Deduplicator stopped")
 

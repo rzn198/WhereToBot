@@ -15,6 +15,7 @@ from urllib.parse import urlparse
 from telegram import MessageEntity
 
 from collector.entities.utf16 import utf16_len
+from shared.tz import belgrade_today
 
 MONTHS_GEN = [
     '', 'января', 'февраля', 'марта', 'апреля', 'мая', 'июня',
@@ -42,7 +43,7 @@ class EventCard:
 
 def format_date_ru(d: date, today: date | None = None) -> str:
     """'Пт, 13 ноября' (с годом, если он не текущий)."""
-    today = today or date.today()
+    today = today or belgrade_today()
     s = f'{WEEKDAYS[d.weekday()]}, {d.day} {MONTHS_GEN[d.month]}'
     return s if d.year == today.year else f'{s} {d.year}'
 

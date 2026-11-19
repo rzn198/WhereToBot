@@ -47,6 +47,7 @@ def load_config() -> dict:
     }
 
     cfg['translation'] = _translation_section(cfg.get('translation') or {}, cfg['opencode'])
+    cfg['card_lines'] = _card_lines_section(cfg.get('card_lines') or {}, cfg['opencode'])
     cfg['parsing'] = _parsing_section(cfg.get('parsing') or {}, cfg['opencode'])
     cfg['deduplication'] = _dedup_section(cfg.get('deduplication') or {}, cfg['opencode'])
     cfg['push'] = _push_section(cfg.get('push') or {}, cfg.get('scheduler') or {})
@@ -151,6 +152,19 @@ def _translation_section(y: dict, oc: dict) -> dict:
         'run_on_start': bool(y.get('run_on_start', True)),
         'alerts': bool(y.get('alerts', True)),          # сообщения админу о сбоях перевода (один раз на эпизод)
     }
+
+
+def _card_lines_section(y: dict, oc: dict) -> dict:
+    """ИИ-строки списка категорий (запускаются из сервиса deduplicator после его прогона).
+    Ключ только свой: OPENCODE_CARDLINES_API_KEY (без запасных: расход этого процесса виден отдельно в панели OpenCode).
+    method: off | shadow (только лог) | on. Остальные параметры разбирает card_lines.settings.card_line_settings."""
+    out = dict(y)
+    out['method'] = _word(os.getenv('CARD_LINES_METHOD') or y.get('method'), 'off')
+    out['models'] = list(y.get('models') or [])
+    out['base_url'] = y.get('base_url') or oc['base_url']
+    out['api_key'] = os.getenv('OPENCODE_CARDLINES_API_KEY', '')
+    out['timeout'] = float(y.get('timeout', 60))
+    return out
 
 
 def _parsing_section(y: dict, oc: dict) -> dict:
