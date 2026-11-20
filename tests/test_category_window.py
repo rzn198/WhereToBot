@@ -330,6 +330,8 @@ def make_update(data='x', user_id=1):
 def _env(monkeypatch):
     settings.clear_cache()
     monkeypatch.setitem(config['telegram'], 'admin_user_id', 999)
+    monkeypatch.setitem(config, 'ui', {})                  # лимиты окна по умолчанию, а не из боевого config.yaml (в нём может быть свой page_size)
+    monkeypatch.setitem(config, 'card_lines', {})          # ИИ-строки выключены: тесты проверяют строки из данных БД
     monkeypatch.setattr(cw, 'belgrade_today', lambda: TODAY)
     monkeypatch.setattr(cats, 'belgrade_today', lambda: TODAY)
     monkeypatch.setattr(cw, 'bot_username', AsyncMock(return_value='TestBot'))
