@@ -430,7 +430,7 @@ async def test_models_exhausted_stops_keeps_rest_and_leaves_no_lines(pool):
 @needs_pg
 async def test_cap_gives_partial_and_next_pass_continues(pool):
     for i in range(1, 6):
-        await add_event(pool, i, title='ZOSTER')
+        await add_event(pool, i, title=f'ZOSTER{i}')      # разные названия: одинаковый текст копируется по хэшу, а не считается
     st = card_line_settings({'method': 'on', 'after_dedup': False, 'max_calls_per_run': 2, 'concurrency': 1})
     h = lambda r: reply('{"title": "Zoster", "value": null}')
     res = await run_pass(pool, make_client(h), st, city='Belgrade', horizon_days=30, today=TODAY)

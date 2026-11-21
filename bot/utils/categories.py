@@ -127,10 +127,11 @@ def window_rows_sql() -> str:
     """Строки окна категории за период: те же условия и порядок, что у feed_sql(period=True), плюс поля для строки списка.
     $4 — массив названий категории, $5 и $6 — первый и последний день включительно (один день: $5 = $6).
     Один запрос на показ окна. Текст поста берём только начало: полный текст в списке не нужен.
-    LEFT JOIN card_lines добавляет ИИ-строку записи (ai_title, ai_attr, ai_profile), если она есть."""
+    LEFT JOIN card_lines добавляет ИИ-строку записи (ai_title, ai_attr, ai_profile, ai_hook, ai_time), если она есть."""
     return f"""
         SELECT u.kind, u.id, u.d, u.title, u.venue, u.tm,
-               cl.short_title AS ai_title, cl.attr AS ai_attr, cl.profile AS ai_profile
+               cl.short_title AS ai_title, cl.attr AS ai_attr, cl.profile AS ai_profile,
+               cl.hook AS ai_hook, cl.text_time AS ai_time
         FROM (
             SELECT 0 AS ord, 'm' AS kind, surrogate_id AS id, date AS d, created_at AS c,
                    left(text, 400) AS title, NULL::text AS venue, NULL::time AS tm

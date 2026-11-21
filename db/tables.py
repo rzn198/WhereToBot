@@ -24,3 +24,4 @@ class Tables:
     DEDUP_REQUESTS        = 'dedup_requests'
     BOT_SETTINGS          = 'bot_settings'
     CARD_LINES            = 'card_lines'
+    CARD_ENRICHMENT       = 'card_enrichment'
