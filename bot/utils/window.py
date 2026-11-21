@@ -164,7 +164,7 @@ def line_text(item: Item, st: WindowSettings, opts: CardLineSettings | None = No
         emoji = prof.emoji_for(item.ai_attr) if (opts.emoji and prof is not None) else ''
         parts = [f'{emoji} {title}' if emoji and title else title or 'Без названия']
         if item.ai_attr and opts.show_value:
-            parts.append(item.ai_attr)
+            parts.append(item.ai_attr.replace(',', ', '))
     else:
         title = event_title(item.title) if item.kind == 'e' else post_title(item.title)
         parts = [truncate(title, st.title_max) or 'Без названия']

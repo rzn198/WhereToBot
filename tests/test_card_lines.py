@@ -38,8 +38,8 @@ def cand(title='DUBIOZA KOLEKTIV', body='Balkan rock band. Koncert u Beogradu.',
 
 def test_canonical_value_closed_list_is_case_insensitive_and_strict():
     assert CONCERT.canonical_value('Рок') == 'рок' and CONCERT.canonical_value(' рок. ') == 'рок'
-    assert CONCERT.canonical_value('джаз/блюз') == 'джаз/блюз'
-    for bad in (None, '', 'null', 'None', 'неизвестно', 'панк', 5, ['рок'], {'a': 1}, True):
+    assert CONCERT.canonical_value('Хип-Хоп') == 'хип-хоп' and CONCERT.canonical_value('джаз/блюз') is None
+    for bad in (None, '', 'null', 'None', 'неизвестно', 'гранж', 5, ['рок'], {'a': 1}, True):
         assert CONCERT.canonical_value(bad) is None
 
 
@@ -51,7 +51,8 @@ def test_canonical_value_pattern_for_age():
 
 
 def test_emoji_for_value_and_pattern():
-    assert CONCERT.emoji_for('рок') == '🎸' and CONCERT.emoji_for(None) == '' and CONCERT.emoji_for('нет такого') == ''
+    assert CONCERT.emoji_for('рок') == '🎸'
+    assert CONCERT.emoji_for(None) == '🎵' and PROFILES['Кино/Театр'].emoji_for(None) == ''      # fallback только у концертов
     assert FAMILY.emoji_for('6+') == '🧸'
 
 
@@ -65,16 +66,16 @@ def test_profile_for_uses_first_category_only_and_skips_museums():
 
 def test_build_profiles_override_and_extend():
     p = build_profiles({
-        'Концерты': {'version': 'v2', 'values': {'рок': '🤘'}},
+        'Концерты': {'version': 'v3', 'values': {'рок': '🤘'}},
         'Новая': {'attr_name': 'тип', 'values': {'a': 'X'}},
         'Музеи': {'ai': True},
         'Спорт/активный отдых': 'мусор',
     })
-    assert p['Концерты'].version == 'v2' and p['Концерты'].values == {'рок': '🤘'} and p['Концерты'].attr_name == 'жанр'
+    assert p['Концерты'].version == 'v3' and p['Концерты'].values == {'рок': '🤘'} and p['Концерты'].attr_name == 'жанр'
     assert p['Новая'].has_attr and p['Музеи'].ai
     assert p['Спорт/активный отдых'].version == 'v1'
     assert set(DEFAULT_PROFILES) <= set(p)
-    assert build_profiles('мусор')['Концерты'].version == 'v1'
+    assert build_profiles('мусор')['Концерты'].version == 'v2' and build_profiles('мусор')['Концерты'].max_values == 2
 
 
 def test_every_default_profile_is_consistent():
@@ -111,7 +112,7 @@ def test_parse_single_value_outside_list_is_dropped_not_rejected():
     c = cand()
     p = parse_single('{"title": "Dubioza Kolektiv", "value": "рок"}', c, 1200, 40)
     assert (p.title, p.value) == ('Dubioza Kolektiv', 'рок')
-    p = parse_single('```json\n{"title": "Dubioza Kolektiv", "value": "панк"}\n```', c, 1200, 40)
+    p = parse_single('```json\n{"title": "Dubioza Kolektiv", "value": "гранж"}\n```', c, 1200, 40)
     assert p.value is None
     assert parse_single('{"title": "Dubioza Kolektiv", "value": null}', c, 1200, 40).value is None
     for raw in ('не json', '[1]', '{"value": "рок"}', '{"title": "Madonna", "value": "рок"}'):
@@ -153,7 +154,7 @@ def test_src_hash_depends_on_text_profile_version_and_limits():
     assert base == src_hash(cand(), 1200, 40)
     assert base != src_hash(cand(title='Other'), 1200, 40) and base != src_hash(cand(body='другое'), 1200, 40)
     assert base != src_hash(cand(), 1200, 50) and base != src_hash(cand(profile=PROFILES['Фестивали']), 1200, 40)
-    bumped = build_profiles({'Концерты': {'version': 'v2'}})['Концерты']
+    bumped = build_profiles({'Концерты': {'version': 'v3'}})['Концерты']
     assert base != src_hash(cand(profile=bumped), 1200, 40)
     assert src_hash(cand(body='a' * 1300), 1200, 40) == src_hash(cand(body='a' * 1200 + 'b' * 50), 1200, 40)
 
@@ -199,7 +200,8 @@ def ev_ai(title='ZOSTER', ai_title='Zoster', attr='рок', profile='Конце�
 
 def test_line_ai_format_emoji_title_value_time():
     assert w.line_text(ev_ai(tm=time(21, 0)), ST, ON) == '🎸 Zoster · рок · 21:00'
-    assert w.line_text(ev_ai(attr=None), ST, ON) == 'Zoster'                         # нет значения: нет эмодзи и жанра
+    assert w.line_text(ev_ai(attr=None), ST, ON) == '🎵 Zoster'                       # жанр не определён: общий эмодзи концертов, слова жанра нет
+    assert w.line_text(ev_ai(attr=None, profile='Кино/Театр'), ST, ON) == 'Zoster'  # у остальных профилей без значения нет и эмодзи
     assert w.line_text(ev_ai(attr='рок', profile='Неизвестный'), ST, ON) == 'Zoster · рок'
     assert w.line_text(ev_ai(profile=None), ST, ON) == 'Zoster · рок'
 
@@ -371,7 +373,7 @@ async def test_regenerates_on_text_change_and_profile_version_change(pool):
     assert (await go()).generated == 1 and (await go()).candidates == 0
     await pool.execute("UPDATE events SET description = 'Grupa Zoster, novi spot' WHERE id = $1", e)
     assert (await go()).generated == 1                                                   # описание изменилось
-    st2 = card_line_settings({'method': 'on', 'after_dedup': False, 'profiles': {'Концерты': {'version': 'v2'}}})
+    st2 = card_line_settings({'method': 'on', 'after_dedup': False, 'profiles': {'Концерты': {'version': 'v3'}}})
     assert (await go(st2)).generated == 1 and (await go(st2)).candidates == 0            # версия профиля сменилась
     await pool.execute("UPDATE events SET event_types = ARRAY['Фестивали'] WHERE id = $1", e)
     assert (await go(st2)).generated == 1                                                # основная категория сменилась
@@ -642,3 +644,59 @@ async def test_benchmark_run_one_collects_rows_for_batch_and_failures(monkeypatc
     assert [(r['status'], r['title'], r['value'], r['call_size']) for r in rows] == [('ok', 'Dubioza Kolektiv', 'рок', 2), ('bad', '', '', 2)]
     assert rows[0]['tokens_in'] == 5 and rows[0]['model'] == 'm1' and 'Madonna' in rows[1]['error']
     assert 'm1' in m.summary(rows)
+
+
+# ------------------------------------------------------------------ концерты: мапинг, несколько значений, общий эмодзи
+
+def test_concert_mapping_is_the_approved_one():
+    assert CONCERT.values == {'рок': '🎸', 'метал': '🤘', 'панк': '⚡', 'инди': '📼', 'поп': '⭐', 'хип-хоп': '🎤',
+                              'электроника': '🎛', 'вечеринка': '🪩', 'джаз': '🎷', 'блюз': '🎺', 'классика': '🎻',
+                              'фолк': '🪕', 'народная': '🪗', 'этно': '🌍'}
+    assert CONCERT.max_values == 2 and CONCERT.fallback_emoji == '🎵' and CONCERT.version == 'v2'
+    assert len(set(CONCERT.values.values())) == len(CONCERT.values)                  # эмодзи не повторяются
+    for rule in ('альтернатива и пост-рок', 'ВСЕГДА «народная»', 'ВСЕГДА «вечеринка»'):
+        assert rule in CONCERT.rules
+
+
+def test_canonical_values_list_string_dedup_and_limit():
+    assert CONCERT.canonical_values(['рок', 'вечеринка']) == ['рок', 'вечеринка']
+    assert CONCERT.canonical_values('Рок, вечеринка') == ['рок', 'вечеринка'] and CONCERT.canonical_values('рок; джаз') == ['рок', 'джаз']
+    assert CONCERT.canonical_values(['рок', 'рок', 'джаз', 'блюз']) == ['рок', 'джаз']        # без повторов, не больше max_values
+    assert CONCERT.canonical_values(['гранж', 'рок']) == ['рок']                                # лишнее не из списка отбрасывается
+    assert CONCERT.canonical_values([]) == [] and CONCERT.canonical_values(None) == [] and CONCERT.canonical_values({'a': 1}) == []
+    assert PROFILES['Кино/Театр'].canonical_values(['фильм', 'спектакль']) == ['фильм']          # max_values=1: берём первое
+    assert FAMILY.canonical_values('6+') == ['6+']
+
+
+def test_emoji_for_several_values_and_fallbacks():
+    assert CONCERT.emoji_for('рок,вечеринка') == '🎸🪩' and CONCERT.emoji_for('рок') == '🎸'
+    assert CONCERT.emoji_for('джаз/блюз') == '🎵'          # значение убрали из списка и ещё не пересчитано: общий эмодзи
+    assert PROFILES['Кино/Театр'].emoji_for('джаз/блюз') == ''
+
+
+def test_parse_single_accepts_list_and_stores_comma_joined():
+    c = cand()
+    assert parse_single('{"title": "Dubioza Kolektiv", "value": ["рок", "вечеринка", "джаз"]}', c, 1200, 40).value == 'рок,вечеринка'
+    assert parse_single('{"title": "Dubioza Kolektiv", "value": []}', c, 1200, 40).value is None
+    assert parse_single('{"title": "Dubioza Kolektiv", "value": "рок"}', c, 1200, 40).value == 'рок'
+
+
+def test_prompt_asks_list_for_concerts_and_string_for_single_value_profiles():
+    p = build_user_prompt(cand(), 1200, 40)
+    assert 'СПИСОК из 1–2 значений' in p and '["..."] или []' in p
+    f = build_user_prompt(cand(profile=PROFILES['Кино/Театр']), 1200, 40)
+    assert 'СПИСОК' not in f and '"..." или null' in f
+    assert '["..."] или []' in build_batch_prompt([cand(id=1), cand(id=2)], 1200, 40)
+
+
+def test_line_two_emoji_and_value_words_joined_nicely():
+    it = ev_ai(attr='рок,вечеринка', tm=time(22, 0))
+    assert w.line_text(it, ST, ON) == '🎸🪩 Zoster · рок, вечеринка · 22:00'
+    assert w.line_text(it, ST, CardLineSettings(method='on', show_value=False, profiles=PROFILES)) == '🎸🪩 Zoster · 22:00'
+
+
+def test_profile_overrides_for_max_values_and_fallback_from_config():
+    p = build_profiles({'Концерты': {'max_values': 1, 'fallback_emoji': ''}})['Концерты']
+    assert p.max_values == 1 and p.fallback_emoji == '' and p.canonical_values(['рок', 'джаз']) == ['рок']
+    assert build_profiles({'Концерты': {'max_values': 'x'}})['Концерты'].max_values == 1
+    assert build_profiles({'Концерты': {'max_values': 99}})['Концерты'].max_values == 3
