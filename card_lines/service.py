@@ -9,15 +9,16 @@ from __future__ import annotations
 
 import asyncio
 from collections import Counter
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta, timezone
 
 from loguru import logger
 
+from card_lines.enrich import DbCache, Enricher, EnrichUnavailable
 from card_lines.select import select_candidates
 from card_lines.settings import CardLineSettings
 from card_lines.text import (PROMPT_VERSION, SYSTEM_PROMPT, BadCardLine, Candidate, Parts, build_batch_prompt,
-                             build_user_prompt, parse_batch, parse_single)
+                             build_user_prompt, hook_wanted, parse_batch, parse_single, useful_chars)
 from db import card_lines as store
 from shared.ai import AIUnavailable
 from shared.tz import belgrade_today
@@ -37,6 +38,8 @@ class PassResult:
     no_value: int = 0           # название принято, значение атрибута пусто (модель не уверена / не из списка)
     remaining: int = 0
     calls: int = 0
+    copied: int = 0             # взяли готовую строку у записи с тем же хэшем (без запроса)
+    hooks: Counter = field(default_factory=Counter)     # статусы хука: ok, ok_web, none, invalid, not_found, retry
     error: str = ''
     by_profile: Counter = field(default_factory=Counter)
 
@@ -53,16 +56,53 @@ def config_horizon_days() -> int:
 async def generate(client, chunk: list[Candidate], st: CardLineSettings) -> list[Parts | BadCardLine]:
     """Один запрос: одна запись или пакет записей ОДНОГО профиля. Результат по порядку chunk. AIUnavailable пробрасывается."""
     if len(chunk) == 1:
-        raw = await client.complete(SYSTEM_PROMPT, build_user_prompt(chunk[0], st.input_chars, st.title_max))
+        raw = await client.complete(SYSTEM_PROMPT, build_user_prompt(chunk[0], st.input_chars, st.title_max, st.hooks))
         try:
-            return [parse_single(raw, chunk[0], st.input_chars, st.title_max)]
+            return [parse_single(raw, chunk[0], st.input_chars, st.title_max, st.hooks)]
         except BadCardLine as e:
             return [e]
-    raw = await client.complete(SYSTEM_PROMPT, build_batch_prompt(chunk, st.input_chars, st.title_max))
+    raw = await client.complete(SYSTEM_PROMPT, build_batch_prompt(chunk, st.input_chars, st.title_max, st.hooks))
     try:
-        return parse_batch(raw, chunk, st.input_chars, st.title_max)
+        return parse_batch(raw, chunk, st.input_chars, st.title_max, st.hooks)
     except BadCardLine as e:
         return [e] * len(chunk)
+
+
+async def finish_hook(client, c: Candidate, parts: Parts, st: CardLineSettings, enricher) -> tuple[Parts, str | None, str, int]:
+    """Доводит хук записи: (parts, hook_status, hook_url, запросов к модели).
+    hook_status: None хуки не просили | ok | none (данных не хватило) | invalid (не прошёл проверку) |
+                 not_found (интернет ничего не нашёл) | retry (сбой сети или моделей: повторим позже).
+    Хук по короткому описанию не принимается (основание только в названии): сразу идём в интернет.
+    Второй запрос к модели делается только с найденными фактами; повод и программу по фактам из интернета код не пропустит."""
+    hs = st.hooks
+    if not hook_wanted(c.profile, hs):
+        return parts, None, '', 0
+    if useful_chars(c.body) < hs.min_description_chars and parts.hook is not None:
+        parts = replace(parts, hook=None, hook_status='none')
+    if parts.hook is not None:
+        return parts, 'ok', '', 0
+    if parts.hook_status == 'invalid':
+        return parts, 'invalid', '', 0
+    if not (hs.enrich.enabled and enricher is not None and c.profile.enrich):
+        return parts, 'none', '', 0
+    try:
+        facts = await enricher.facts_for(c.profile.enrich, parts.title, hint=f"{c.title}\n{(c.body or '')[:st.input_chars]}")
+    except EnrichUnavailable:
+        return parts, 'retry', '', 0
+    if facts is None:
+        return parts, 'not_found', '', 0
+    try:
+        raw = await client.complete(SYSTEM_PROMPT, build_user_prompt(c, st.input_chars, st.title_max, hs, facts.text, facts.source))
+    except AIUnavailable:
+        return parts, 'retry', '', 1
+    try:
+        p2 = parse_single(raw, c, st.input_chars, st.title_max, hs, facts.text)
+    except BadCardLine:
+        return parts, 'invalid', '', 1
+    if p2.hook is not None:
+        return (replace(parts, hook=p2.hook, hook_status='ok', enough=p2.enough, text_time=parts.text_time or p2.text_time),
+                'ok', facts.url if p2.hook.source == 'web' else '', 1)
+    return parts, ('invalid' if p2.hook_status == 'invalid' else 'none'), '', 1
 
 
 def make_chunks(todo: list[Candidate], batch_size: int) -> list[list[Candidate]]:
@@ -82,7 +122,7 @@ def make_chunks(todo: list[Candidate], batch_size: int) -> list[list[Candidate]]
 
 
 async def run_pass(pool, client, st: CardLineSettings, *, city: str | None = None, horizon_days: int | None = None,
-                   today=None, fails: Counter | None = None) -> PassResult:
+                   today=None, fails: Counter | None = None, enricher=None) -> PassResult:
     res = PassResult()
     if not st.enabled:
         res.status = 'off'
@@ -109,6 +149,18 @@ async def run_pass(pool, client, st: CardLineSettings, *, city: str | None = Non
         logger.warning(f"CARD_LINES_SKIP | {res.error}")
         return res
 
+    copied = await store.copy_by_hash(pool, todo, PROMPT_VERSION)
+    if copied:
+        res.copied = len(copied)
+        todo = [c for c in todo if c.key not in copied]
+        logger.info(f"CARD_LINES_COPY | скопировано по хэшу (повторы события)={len(copied)}")
+    if not todo:
+        return res
+    if enricher is None and st.hooks.enabled and st.hooks.enrich.enabled:
+        enricher = Enricher(st.hooks.enrich, DbCache(pool))
+        own_enricher = True
+    else:
+        own_enricher = False
     client.begin_run()
     chunks = make_chunks(todo, st.batch_size)
     logger.info(f"CARD_LINES_START | записей={len(todo)} | запросов≈{len(chunks)} | batch_size={st.batch_size} | "
@@ -135,7 +187,6 @@ async def run_pass(pool, client, st: CardLineSettings, *, city: str | None = Non
                 logger.warning(f"CARD_LINES_STOP | {e}")
                 return
         good = 0
-        model = client.current_model
         for c, p in zip(chunk, parts):
             if isinstance(p, BadCardLine):
                 res.failed += 1
@@ -144,8 +195,14 @@ async def run_pass(pool, client, st: CardLineSettings, *, city: str | None = Non
                 continue
             good += 1
             fails.pop(c.key, None)
+            p, hstatus, hurl, extra_calls = await finish_hook(client, c, p, st, enricher)
+            res.calls += extra_calls
+            model = client.current_model
+            if hstatus:
+                res.hooks['ok_web' if hstatus == 'ok' and p.hook and p.hook.source == 'web' else hstatus] += 1
             try:
-                await store.save_line(pool, c.kind, c.id, p.title, p.value, c.profile.name, c.src_hash, model, PROMPT_VERSION)
+                await store.save_line(pool, c.kind, c.id, p.title, p.value, c.profile.name, c.src_hash, model, PROMPT_VERSION,
+                                      hook=p.hook, hook_status=hstatus, hook_url=hurl, text_time=p.text_time)
             except Exception as e:
                 res.failed += 1
                 logger.error(f"CARD_LINE_SAVE_FAILED | {c.kind}{c.id} | {type(e).__name__}: {e}")
@@ -154,14 +211,20 @@ async def run_pass(pool, client, st: CardLineSettings, *, city: str | None = Non
             if p.value is None:
                 res.no_value += 1
             logger.info(f"CARD_LINE | {c.kind}{c.id} | {c.profile.name} | {p.title!r} | {p.value or '-'} | {model}")
+            if hstatus:
+                logger.info(f"CARD_HOOK | {c.kind}{c.id} | {hstatus} | f{p.hook.formula if p.hook else '-'} | "
+                            f"{p.hook.source if p.hook else '-'} | {p.hook.text if p.hook else p.hook_error or '-'}")
         client.report_ok() if good else client.report_bad_output()
 
     await asyncio.gather(*[one(c) for c in chunks])
     if stop.is_set():
         res.status = 'incomplete'
     await client.aclose()
+    if own_enricher:
+        logger.info(f"CARD_ENRICH | {enricher.stats}")
+        await enricher.aclose()
     logger.info(f"CARD_LINES_DONE | status={res.status} | записей={res.candidates} | готово={res.generated} | "
-                f"без_значения={res.no_value} | не_прошли_проверку={res.failed} | осталось={res.remaining} | "
+                f"без_значения={res.no_value} | не_прошли_проверку={res.failed} | осталось={res.remaining} | хуки={dict(res.hooks)} | "
                 f"запросов={res.calls} | {client.stats.line()}")
     return res
 

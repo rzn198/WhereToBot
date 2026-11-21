@@ -38,6 +38,67 @@ def _mode(value) -> str:
     return m if m in MODES else 'off'
 
 
+def _onoff(value) -> bool:
+    """YAML 1.1: голое on/off становится True/False; строки on/off/true/false тоже понимаем."""
+    if isinstance(value, bool):
+        return value
+    return str(value).strip().lower() in ('on', 'true', 'yes', '1') if value not in (None, '') else False
+
+
+@dataclass(frozen=True)
+class EnrichSettings:
+    """Обогащение фактами из интернета для записей без достаточного описания (card_lines.hooks.enrich)."""
+    enabled: bool = False
+    sources: tuple[str, ...] = ('musicbrainz', 'wikipedia')
+    languages: tuple[str, ...] = ('ru', 'en', 'sr')
+    contact: str = ''                   # email или адрес бота для User-Agent (MusicBrainz и Wikipedia требуют контакт)
+    timeout: float = 10.0
+    ttl_found_days: int = 90
+    ttl_missing_days: int = 14          # «не найдено»: повтор поиска (и хука) через столько дней
+    ttl_ambiguous_days: int = 30
+    retry_hours: float = 6.0            # сбой сети: повтор хука через столько часов
+    mb_min_interval: float = 1.1        # MusicBrainz: не чаще 1 запроса в секунду
+
+
+@dataclass(frozen=True)
+class HookSettings:
+    """Хуки строк (card_lines.hooks): фраза после названия по иерархии формул категории."""
+    enabled: bool = False
+    hook_max: int = 80                  # максимум символов хука
+    min_description_chars: int = 40     # короче (после удаления «ORGANIZATOR/IZVOR: ...») = данных нет, сразу обогащение
+    enrich: EnrichSettings = field(default_factory=EnrichSettings)
+
+    @property
+    def key(self) -> str:
+        """Часть хэша входных данных: смена настроек хуков пересчитывает записи."""
+        return f"h{self.hook_max}:{int(self.enrich.enabled)}" if self.enabled else ''
+
+
+def hook_settings(cfg: dict | None) -> HookSettings:
+    c = cfg if isinstance(cfg, dict) else {}
+    e = c.get('enrich') if isinstance(c.get('enrich'), dict) else {}
+    de = EnrichSettings()
+    srcs = tuple(str(x).strip().lower() for x in (e.get('sources') or de.sources) if str(x).strip()) or de.sources
+    langs = tuple(str(x).strip().lower() for x in (e.get('languages') or de.languages) if str(x).strip()) or de.languages
+    enrich = EnrichSettings(
+        enabled=_onoff(e.get('method', e.get('enabled'))),
+        sources=srcs, languages=langs, contact=str(e.get('contact') or '').strip(),
+        timeout=_float(e.get('timeout'), de.timeout, 1.0),
+        ttl_found_days=_int(e.get('ttl_found_days'), de.ttl_found_days, 1, 3650),
+        ttl_missing_days=_int(e.get('ttl_missing_days'), de.ttl_missing_days, 1, 3650),
+        ttl_ambiguous_days=_int(e.get('ttl_ambiguous_days'), de.ttl_ambiguous_days, 1, 3650),
+        retry_hours=_float(e.get('retry_hours'), de.retry_hours, 0.1),
+        mb_min_interval=_float(e.get('mb_min_interval'), de.mb_min_interval, 1.0),
+    )
+    d = HookSettings()
+    return HookSettings(
+        enabled=_onoff(c.get('method', c.get('enabled'))),
+        hook_max=_int(c.get('hook_max'), d.hook_max, 20, 100),
+        min_description_chars=_int(c.get('min_description_chars'), d.min_description_chars, 0, 2000),
+        enrich=enrich,
+    )
+
+
 @dataclass(frozen=True)
 class CardLineSettings:
     method: str = 'off'                 # off | shadow (только лог «сколько было бы») | on
@@ -55,6 +116,7 @@ class CardLineSettings:
     emoji: bool = True                  # эмодзи в начале строки (по значению атрибута)
     show_value: bool = True             # слово значения (жанр) после названия
     profiles: dict[str, Profile] = field(default_factory=dict)
+    hooks: HookSettings = field(default_factory=HookSettings)
 
     @property
     def enabled(self) -> bool:
@@ -63,6 +125,11 @@ class CardLineSettings:
     @property
     def use_in_bot(self) -> bool:
         return self.method == 'on'
+
+    @property
+    def use_hooks(self) -> bool:
+        """Бот показывает хуки: card_lines.method on и card_lines.hooks.method on."""
+        return self.method == 'on' and self.hooks.enabled
 
 
 def card_line_settings(cfg: dict | None) -> CardLineSettings:
@@ -84,6 +151,7 @@ def card_line_settings(cfg: dict | None) -> CardLineSettings:
         emoji=_bool(c.get('emoji'), d.emoji),
         show_value=_bool(c.get('show_value'), d.show_value),
         profiles=build_profiles(c.get('profiles')),
+        hooks=hook_settings(c.get('hooks')),
     )
 
 

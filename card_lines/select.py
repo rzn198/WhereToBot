@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from collections import Counter
 from dataclasses import dataclass, field
-from datetime import date
+from datetime import date, datetime, timedelta, timezone
 
 from card_lines.profiles import profile_for
 from card_lines.settings import CardLineSettings
@@ -32,7 +32,8 @@ def candidates_sql() -> str:
     """$1 город событий, $2 первый день, $3 последний, $4 only_after_dedup."""
     return f"""
         SELECT 'e'::text AS kind, e.id::bigint AS id, e.title AS title, coalesce(e.description, '') AS body,
-               coalesce(e.venue, '') AS venue, e.event_types, e.starts_at AS d, cl.src_hash
+               coalesce(e.venue, '') AS venue, e.event_types, e.starts_at AS d, cl.src_hash,
+               cl.hook_status, cl.updated_at AS cl_updated
         FROM {Tables.EVENTS} e
         LEFT JOIN {Tables.CARD_LINES} cl ON cl.kind = 'e' AND cl.ref_id = e.id
         WHERE e.city = $1 AND NOT e.hidden_by_admin AND e.starts_at BETWEEN $2::date AND $3::date
@@ -41,7 +42,8 @@ def candidates_sql() -> str:
           AND ($4::boolean = false OR EXISTS (SELECT 1 FROM {Tables.DEDUP_DATES} dd
                           WHERE dd.day = e.starts_at AND dd.processed_at >= e.created_at))
         UNION ALL
-        SELECT 'm', m.surrogate_id, '', coalesce(m.text, ''), '', m.event_types, m.date, cl.src_hash
+        SELECT 'm', m.surrogate_id, '', coalesce(m.text, ''), '', m.event_types, m.date, cl.src_hash,
+               cl.hook_status, cl.updated_at AS cl_updated
         FROM {Tables.MESSAGES} m
         LEFT JOIN {Tables.CARD_LINES} cl ON cl.kind = 'm' AND cl.ref_id = m.surrogate_id
         WHERE NOT m.hidden_by_admin AND m.date BETWEEN $2::date AND $3::date
@@ -53,20 +55,34 @@ def candidates_sql() -> str:
     """
 
 
+def _retry_due(r, st: CardLineSettings, now: datetime) -> bool:
+    """Хук ждал повтора: «не найдено» (через ttl_missing_days) или сбой сети (через retry_hours)."""
+    status, updated = r['hook_status'], r['cl_updated']
+    if updated is None:
+        return False
+    e = st.hooks.enrich
+    if status == 'not_found':
+        return now - updated >= timedelta(days=e.ttl_missing_days)
+    if status == 'retry':
+        return now - updated >= timedelta(hours=e.retry_hours)
+    return False
+
+
 async def select_candidates(pool, st: CardLineSettings, *, today: date, horizon_days: int, city: str,
                             include_done: bool = False) -> Selection:
     """include_done=True — вернуть и записи с актуальной строкой (для скрипта сравнения моделей)."""
-    from datetime import timedelta
     rows = await pool.fetch(candidates_sql(), city, today, today + timedelta(days=horizon_days), st.after_dedup)
     sel = Selection(total=len(rows))
+    now = datetime.now(timezone.utc)
     for r in rows:
         prof = profile_for(r['event_types'], st.profiles)
         if prof is None:
             sel.no_profile += 1
             continue
         c = Candidate(kind=r['kind'], id=r['id'], title=r['title'] or '', body=r['body'], venue=r['venue'], profile=prof)
-        h = src_hash(c, st.input_chars, st.title_max)
-        if r['src_hash'] == h and not include_done:
+        hooked = st.hooks.enabled and prof.has_hook
+        h = src_hash(c, st.input_chars, st.title_max, f"{st.hooks.key}:{prof.hook_fingerprint}" if hooked else '')
+        if r['src_hash'] == h and not include_done and not (hooked and _retry_due(r, st, now)):
             sel.up_to_date += 1
             continue
         sel.todo.append(Candidate(c.kind, c.id, c.title, c.body, c.venue, c.profile, h))

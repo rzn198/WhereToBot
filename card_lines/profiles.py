@@ -7,6 +7,8 @@
   rules     — правила для модели именно для этой категории (добавляются в промпт);
   version   — версия правил профиля; её смена пересчитывает строки только этой категории;
   max_values — сколько значений атрибута можно дать одной записи (по умолчанию 1; у «Концертов» 2: основной жанр первым);
+  formulas  — формулы хука по приоритету (name, need, form, web); пусто — хука у категории нет; hook_rules — доп. правила хука;
+  enrich    — вид обогащения фактами из интернета ('artist'); пусто — без обогащения;
   fallback_emoji — эмодзи записи, когда значение не определено (у «Концертов» 🎵; пусто — без эмодзи);
   ai        — false: профиль без ИИ (строка из данных БД, например музеи).
 Встроенные профили можно менять и дополнять в config.yaml → card_lines.profiles.<категория>; задавать нужно только то,
@@ -23,6 +25,15 @@ MODES = ('off', 'shadow', 'on')
 
 
 @dataclass(frozen=True)
+class Formula:
+    """Формула хука. Порядок в профиле = строгий приоритет: модель берёт первую, под которую в данных есть факты."""
+    name: str                       # «повод + программа»
+    need: str                       # какие факты должны быть в данных
+    form: str                       # форма фразы
+    web: bool = False               # можно ли опираться на факты из интернета (устойчивые: кто это, страна, жанр, годы)
+
+
+@dataclass(frozen=True)
 class Profile:
     name: str                                   # название категории (ключ профиля)
     ai: bool = True
@@ -34,10 +45,26 @@ class Profile:
     version: str = 'v1'
     max_values: int = 1
     fallback_emoji: str = ''
+    formulas: tuple[Formula, ...] = ()          # хук: формулы по приоритету; пусто — хука у категории нет
+    hook_rules: str = ''                        # дополнительные правила хука этой категории
+    enrich: str = ''                            # вид обогащения: 'artist' (MusicBrainz + Wikipedia) или пусто
 
     @property
     def has_attr(self) -> bool:
         return bool(self.attr_name and (self.values or self.pattern))
+
+    @property
+    def has_hook(self) -> bool:
+        return bool(self.formulas)
+
+    @property
+    def hook_fingerprint(self) -> str:
+        """Меняется при правке формул/правил хука/вида обогащения: записи пересчитываются."""
+        import hashlib
+        import json
+        raw = json.dumps([[f.name, f.need, f.form, f.web] for f in self.formulas] + [self.hook_rules, self.enrich],
+                         ensure_ascii=False)
+        return hashlib.md5(raw.encode('utf-8')).hexdigest()[:10]
 
     def canonical_value(self, raw) -> str | None:
         """Значение атрибута из ответа модели; None, если не из списка / не по шаблону / пусто."""
@@ -86,6 +113,25 @@ DEFAULT_PROFILES: dict[str, dict] = {
                    'электроника': '🎛', 'вечеринка': '🪩', 'джаз': '🎷', 'блюз': '🎺', 'классика': '🎻',
                    'фолк': '🪕', 'народная': '🪗', 'этно': '🌍'},
         'version': 'v2',
+        'enrich': 'artist',
+        'formulas': [
+            {'name': 'повод + программа',
+             'need': 'в данных явно указан повод (юбилей, возвращение, презентация альбома, тур, «впервые» и т. п.) И то, '
+                     'что будет исполнено или показано (программа, альбом, песни)',
+             'form': '[Артист] — [повод]: [программа]'},
+            {'name': 'кто это + повод',
+             'need': 'в данных есть краткая характеристика исполнителя И явный повод',
+             'form': '[Артист] — [кто это], [повод]'},
+            {'name': 'формат + состав',
+             'need': 'указаны формат выступления (акустика, оркестр, диджей-сет, трибьют, камерный вечер) и состав или участники',
+             'form': '[Артист] — [формат]: [состав]'},
+            {'name': 'что будет в зале',
+             'need': 'описаны атмосфера, программа вечера или то, что ждёт зрителя',
+             'form': '[Артист] — [что ждёт на концерте]'},
+            {'name': 'кто это',
+             'need': 'известны только устойчивые факты об исполнителе (тип, страна или город, жанр, годы), повода и программы нет',
+             'form': '[Артист] — [кто это: страна или город, жанр, чем известен]', 'web': True},
+        ],
         'rules': ('Название — исполнитель или группа на первом месте (как в источнике); если выступают несколько, '
                   'первые двое-трое через запятую. Названия туров, «концерт», «live», «Beograd» не нужны. '
                   'Жанр определяй по описанию и по тому, что знаешь об исполнителе. Что к чему относится: '
@@ -175,6 +221,21 @@ def _version(value, default: str) -> str:
     return s or default
 
 
+def _formulas(raw) -> tuple[Formula, ...]:
+    out = []
+    for f in raw if isinstance(raw, list) else []:
+        if isinstance(f, dict) and str(f.get('name') or '').strip():
+            out.append(Formula(name=str(f['name']).strip(), need=str(f.get('need') or '').strip(),
+                               form=str(f.get('form') or '').strip(), web=_bool(f.get('web'))))
+    return tuple(out)
+
+
+def _bool(value) -> bool:
+    if isinstance(value, bool):
+        return value
+    return str(value).strip().lower() in ('true', 'yes', 'on', '1') if value not in (None, '') else False
+
+
 def _profile(name: str, base: dict, over: dict | None) -> Profile:
     d = dict(base)
     for k, v in (over or {}).items():
@@ -192,6 +253,9 @@ def _profile(name: str, base: dict, over: dict | None) -> Profile:
         version=_version(d.get('version'), 'v1'),
         max_values=_int(d.get('max_values'), 1, 1, 3),
         fallback_emoji=str(d.get('fallback_emoji') or '').strip(),
+        formulas=_formulas(d.get('formulas')),
+        hook_rules=str(d.get('hook_rules') or '').strip(),
+        enrich=str(d.get('enrich') or '').strip().lower(),
     )
 
 

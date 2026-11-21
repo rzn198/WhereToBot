@@ -10,9 +10,12 @@
 --per-profile   записей каждого профиля в выборке (по умолчанию 8; события и посты вперемешку)
 --profiles      только эти категории (по умолчанию все профили с ИИ)
 --seed          зерно случайной выборки: одинаковая выборка у всех моделей и запусков
+--hooks         off|on: проверить хуки (по умолчанию как в config.yaml card_lines.hooks; on включает их принудительно)
+--enrich        off|on: интернет-факты (Wikipedia, MusicBrainz) для записей без достаточного описания; кэш только в памяти
 Ключ: OPENCODE_CARDLINES_API_KEY.
 CSV: model, batch_size, profile, kind, id, source_title, source_text, title, value, status, error, latency_ms (задержка запроса,
-у пакета одна на все записи), call_size, tokens_in, tokens_out (по запросу). В конце — сводка по каждой паре модель/пакет.
+у пакета одна на все записи), call_size, tokens_in, tokens_out (по запросу),
+hook, hook_formula, hook_source (text|web), hook_status (ok|none|invalid|not_found|retry), hook_evidence, hook_url. В конце — сводка по каждой паре модель/пакет.
 """
 from __future__ import annotations
 
@@ -29,7 +32,8 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 os.environ.setdefault('APP_ENV', 'production')
 
 from card_lines.select import select_candidates  # noqa: E402
-from card_lines.service import DEFAULT_CITY, config_horizon_days, generate, make_chunks  # noqa: E402
+from card_lines.enrich import Enricher, MemoryCache  # noqa: E402
+from card_lines.service import DEFAULT_CITY, config_horizon_days, finish_hook, generate, make_chunks  # noqa: E402
 from card_lines.settings import card_line_settings  # noqa: E402
 from card_lines.text import BadCardLine  # noqa: E402
 from db.connection import close_db_pool, init_db_pool  # noqa: E402
@@ -38,7 +42,8 @@ from shared.config import config  # noqa: E402
 from shared.tz import belgrade_today  # noqa: E402
 
 FIELDS = ['model', 'batch_size', 'profile', 'kind', 'id', 'source_title', 'source_text', 'title', 'value', 'status', 'error',
-          'latency_ms', 'call_size', 'tokens_in', 'tokens_out']
+          'latency_ms', 'call_size', 'tokens_in', 'tokens_out', 'hook', 'hook_formula', 'hook_source', 'hook_status', 'hook_evidence',
+          'hook_url']
 
 
 def sample(cands, per_profile: int, profiles: set[str] | None, seed: int):
@@ -54,7 +59,7 @@ def sample(cands, per_profile: int, profiles: set[str] | None, seed: int):
     return out
 
 
-async def run_one(model: str, batch: int, cands, st, base_cfg: dict, concurrency: int):
+async def run_one(model: str, batch: int, cands, st, base_cfg: dict, concurrency: int, enricher=None):
     client = AIClient('card-lines-bench', base_cfg['api_key'], [model], base_url=base_cfg['base_url'],
                       timeout=float(base_cfg.get('timeout') or 60), temperature=base_cfg.get('temperature'))
     client.begin_run()
@@ -75,7 +80,13 @@ async def run_one(model: str, batch: int, cands, st, base_cfg: dict, concurrency
             tin, tout = client.stats.prompt_tokens - before_in, client.stats.completion_tokens - before_out
         for c, p in zip(chunk, parts):
             bad = isinstance(p, BadCardLine)
+            hstatus, hurl = '', ''
+            if not bad:
+                p, hstatus, hurl, _ = await finish_hook(client, c, p, st, enricher)
+            hk = None if bad else p.hook
             rows.append({
+                'hook': hk.text if hk else '', 'hook_formula': hk.formula if hk else '', 'hook_source': hk.source if hk else '',
+                'hook_status': hstatus or '', 'hook_evidence': hk.evidence if hk else '', 'hook_url': hurl,
                 'model': model, 'batch_size': batch, 'profile': c.profile.name, 'kind': c.kind, 'id': c.id,
                 'source_title': c.title, 'source_text': (c.body or '').replace('\n', ' ')[:200],
                 'title': '' if bad else p.title, 'value': '' if bad else (p.value or ''),
@@ -104,6 +115,21 @@ def summary(rows) -> str:
     return "\n".join(lines)
 
 
+def hook_summary(rows) -> str:
+    by = defaultdict(list)
+    for r in rows:
+        by[(r['model'], r['batch_size'])].append(r)
+    lines = [f"{'модель':28} {'пакет':>5} {'хук ok':>7} {'из текста':>9} {'из сети':>8} {'none':>5} {'invalid':>7} {'not_found':>9} {'retry':>5}"]
+    for (model, batch), rs in sorted(by.items()):
+        n = len(rs)
+        cnt = lambda f: sum(1 for r in rs if f(r))
+        lines.append(f"{model:28} {batch:>5} {cnt(lambda r: r['hook_status'] == 'ok') / n:>7.0%} {cnt(lambda r: r['hook_source'] == 'text') / n:>9.0%} "
+                     f"{cnt(lambda r: r['hook_source'] == 'web') / n:>8.0%} {cnt(lambda r: r['hook_status'] == 'none'):>5} "
+                     f"{cnt(lambda r: r['hook_status'] == 'invalid'):>7} {cnt(lambda r: r['hook_status'] == 'not_found'):>9} "
+                     f"{cnt(lambda r: r['hook_status'] == 'retry'):>5}")
+    return "\n".join(lines)
+
+
 async def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument('--models', default='')
@@ -111,6 +137,8 @@ async def main() -> None:
     ap.add_argument('--per-profile', type=int, default=8)
     ap.add_argument('--profiles', default='')
     ap.add_argument('--seed', type=int, default=1)
+    ap.add_argument('--hooks', choices=['off', 'on'], default='')
+    ap.add_argument('--enrich', choices=['off', 'on'], default='')
     ap.add_argument('--concurrency', type=int, default=1, help='параллельных запросов (1 = чистые замеры задержки)')
     ap.add_argument('--out', default='/tmp/card_lines_benchmark.csv')
     args = ap.parse_args()
@@ -122,7 +150,15 @@ async def main() -> None:
         sys.exit('Нет моделей: укажи --models или card_lines.models в config.yaml')
     if not cfg.get('api_key'):
         sys.exit('Нет ключа: задай OPENCODE_CARDLINES_API_KEY в .env')
-    st = card_line_settings({**cfg, 'method': 'on', 'after_dedup': False})
+    hooks_cfg = dict(cfg.get('hooks') or {})
+    enrich_cfg = dict(hooks_cfg.get('enrich') or {})
+    if args.hooks:
+        hooks_cfg['method'] = args.hooks
+    if args.enrich:
+        enrich_cfg['method'] = args.enrich
+    hooks_cfg['enrich'] = enrich_cfg
+    st = card_line_settings({**cfg, 'method': 'on', 'after_dedup': False, 'hooks': hooks_cfg})
+    enricher = Enricher(st.hooks.enrich, MemoryCache()) if st.hooks.enabled and st.hooks.enrich.enabled else None
 
     pool = await init_db_pool()
     try:
@@ -138,13 +174,18 @@ async def main() -> None:
     for model in models:
         for batch in batches:
             print(f'→ {model}, пакет {batch} ...', flush=True)
-            all_rows += await run_one(model, batch, cands, st, cfg, args.concurrency)
+            all_rows += await run_one(model, batch, cands, st, cfg, args.concurrency, enricher)
     with open(args.out, 'w', newline='', encoding='utf-8-sig') as f:
         w = csv.DictWriter(f, fieldnames=FIELDS)
         w.writeheader()
         w.writerows(all_rows)
     print(f'\nCSV: {args.out}\n')
     print(summary(all_rows))
+    if st.hooks.enabled:
+        print('\n' + hook_summary(all_rows))
+    if enricher is not None:
+        print(f'интернет: {enricher.stats}')
+        await enricher.aclose()
 
 
 if __name__ == '__main__':

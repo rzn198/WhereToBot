@@ -139,6 +139,8 @@ class Item:
     ai_title: str | None = None     # ИИ-строка (card_lines): короткое название
     ai_attr: str | None = None      # значение атрибута (жанр, формат...)
     ai_profile: str | None = None   # профиль, по которому строка сгенерирована (нужен для эмодзи)
+    ai_hook: str | None = None      # хук (фраза после названия)
+    ai_time: object = None          # время старта из текста записи (если в БД starts_time пусто)
 
     @property
     def ref(self) -> int | str:
@@ -150,26 +152,40 @@ def item_from_row(row) -> Item:
     return Item(kind=row['kind'], id=row['id'], day=row['d'], title=row['title'] or '', venue=row['venue'], time=row['tm'],
                 ai_title=row['ai_title'] if 'ai_title' in keys else None,
                 ai_attr=row['ai_attr'] if 'ai_attr' in keys else None,
-                ai_profile=row['ai_profile'] if 'ai_profile' in keys else None)
+                ai_profile=row['ai_profile'] if 'ai_profile' in keys else None,
+                ai_hook=row['ai_hook'] if 'ai_hook' in keys else None,
+                ai_time=row['ai_time'] if 'ai_time' in keys else None)
+
+
+LINE_CAP = 190      # видимых символов в строке с хуком: страница из 20 строк остаётся в пределах 4096
 
 
 def line_text(item: Item, st: WindowSettings, opts: CardLineSettings | None = None) -> str:
-    """Текст строки без номера.
-    Есть ИИ-строка и card_lines.method: on → `🎸 Название · жанр · 21:00` (эмодзи и жанр только если известны);
-    иначе строка из данных БД: `Название · 21:00 · Место`."""
+    """Текст строки без маркера.
+    ИИ-строка и card_lines.method on: `🎸 Название — хук · 21:00`; если хука нет (или card_lines.hooks выключены) —
+    `🎸 Название · жанр · 21:00` (эмодзи и жанр только если известны); иначе строка из данных БД: `Название · 21:00 · Место`.
+    Время: из БД, а если там пусто, то явное время из текста записи."""
     use_ai = bool(opts is not None and opts.use_in_bot and item.ai_title)
+    when = item.time if item.time is not None else (item.ai_time if use_ai else None)
     if use_ai:
         title = truncate(event_title(item.ai_title), st.title_max)
         prof = opts.profiles.get(item.ai_profile or '')
         emoji = prof.emoji_for(item.ai_attr) if (opts.emoji and prof is not None) else ''
-        parts = [f'{emoji} {title}' if emoji and title else title or 'Без названия']
+        head = f'{emoji} {title}' if emoji and title else title or 'Без названия'
+        hook = (item.ai_hook or '').strip() if opts.use_hooks else ''
+        tail = f' · {when.strftime("%H:%M")}' if when is not None else ''
+        if hook:
+            room = LINE_CAP - len(head) - len(' — ') - len(tail)
+            if room >= 12:
+                return f'{head} — {truncate(hook, min(room, opts.hooks.hook_max))}{tail}'
+        parts = [head]
         if item.ai_attr and opts.show_value:
             parts.append(item.ai_attr.replace(',', ', '))
     else:
         title = event_title(item.title) if item.kind == 'e' else post_title(item.title)
         parts = [truncate(title, st.title_max) or 'Без названия']
-    if item.time is not None:
-        parts.append(item.time.strftime('%H:%M'))
+    if when is not None:
+        parts.append(when.strftime('%H:%M'))
     venue = short_venue(item.venue, st.venue_max) if item.kind == 'e' and st.show_venue else ''
     if venue:
         parts.append(venue)
