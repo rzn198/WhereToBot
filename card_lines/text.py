@@ -52,7 +52,7 @@ class Candidate:
 @dataclass(frozen=True)
 class Parts:
     title: str
-    value: str | None
+    value: str | None           # одно значение или несколько через запятую («рок,вечеринка»), основное первым
 
 
 def fold(s: str) -> str:
@@ -76,8 +76,15 @@ def _attr_block(p: Profile) -> str:
         how = f"Допустимые значения СТРОГО из списка: {allowed}."
     else:
         how = "Значение строго в виде «6+» или «3–7» (только цифры, «+» или «–»)."
+    if p.max_values > 1:
+        return (f"Атрибут «{p.attr_name}» (поле \"value\" — СПИСОК из 1–{p.max_values} значений, основное первым). {how} "
+                "Если по данным не уверен или ничего не подходит — пустой список []. Не угадывай.\n")
     return (f"Атрибут «{p.attr_name}» (поле \"value\"). {how} Если по данным не уверен или ничего не подходит — null. "
             "Не угадывай.\n")
+
+
+def _value_format(p: Profile) -> str:
+    return '["..."] или []' if p.max_values > 1 and p.has_attr else '"..." или null'
 
 
 def _rules(p: Profile, title_max: int) -> str:
@@ -111,7 +118,7 @@ def build_user_prompt(c: Candidate, input_chars: int, title_max: int) -> str:
     return (
         "Подготовь строку для списка: короткое название и значение атрибута.\n\n"
         + _rules(c.profile, title_max)
-        + "\nФормат ответа: {\"title\": \"...\", \"value\": \"...\" или null}\n\n"
+        + f"\nФормат ответа: {{\"title\": \"...\", \"value\": {_value_format(c.profile)}}}\n\n"
         "=== ЗАПИСЬ (данные) ===\n" + _record(c, input_chars) + "\n=== КОНЕЦ ==="
     )
 
@@ -122,7 +129,7 @@ def build_batch_prompt(cands: list[Candidate], input_chars: int, title_max: int)
     return (
         f"Для КАЖДОЙ из {len(cands)} записей подготовь строку для списка: короткое название и значение атрибута.\n\n"
         + _rules(cands[0].profile, title_max)
-        + "\nФормат ответа: {\"items\": [{\"n\": 1, \"title\": \"...\", \"value\": \"...\" или null}, ...]} — "
+        + f"\nФормат ответа: {{\"items\": [{{\"n\": 1, \"title\": \"...\", \"value\": {_value_format(cands[0].profile)}}}, ...]}} — "
           "по одному объекту на каждую запись, n — номер записи.\n\n"
         "=== ЗАПИСИ (данные) ===\n" + blocks + "\n=== КОНЕЦ ==="
     )
@@ -160,7 +167,8 @@ def check_parts(obj: dict, c: Candidate, input_chars: int, title_max: int) -> Pa
     if 'title' not in obj:
         raise BadCardLine("нет поля title")
     source = f"{c.title}\n{c.venue}\n{(c.body or '')[:input_chars]}"
-    return Parts(check_title(obj.get('title'), source, title_max), c.profile.canonical_value(obj.get('value')))
+    values = c.profile.canonical_values(obj.get('value'))
+    return Parts(check_title(obj.get('title'), source, title_max), ','.join(values) or None)
 
 
 def parse_single(raw: str, c: Candidate, input_chars: int, title_max: int) -> Parts:

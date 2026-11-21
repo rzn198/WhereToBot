@@ -6,6 +6,8 @@
   pattern   — вместо списка: регулярное выражение значения (возраст «6+», «3–7»); эмодзи тогда одно — emoji;
   rules     — правила для модели именно для этой категории (добавляются в промпт);
   version   — версия правил профиля; её смена пересчитывает строки только этой категории;
+  max_values — сколько значений атрибута можно дать одной записи (по умолчанию 1; у «Концертов» 2: основной жанр первым);
+  fallback_emoji — эмодзи записи, когда значение не определено (у «Концертов» 🎵; пусто — без эмодзи);
   ai        — false: профиль без ИИ (строка из данных БД, например музеи).
 Встроенные профили можно менять и дополнять в config.yaml → card_lines.profiles.<категория>; задавать нужно только то,
 что меняется (значения values заменяются целиком).
@@ -30,6 +32,8 @@ class Profile:
     emoji: str = ''                             # эмодзи для значений по pattern
     rules: str = ''
     version: str = 'v1'
+    max_values: int = 1
+    fallback_emoji: str = ''
 
     @property
     def has_attr(self) -> bool:
@@ -50,22 +54,51 @@ class Profile:
         s = re.sub(r'\s*[-—–]\s*', '–', s)
         return s if re.fullmatch(self.pattern, s) else None
 
+    def canonical_values(self, raw) -> list[str]:
+        """Значения атрибута из ответа модели: строка («рок, вечеринка»), список или одно значение. Только допустимые,
+        без повторов, не больше max_values (основной первым). Пусто — модель не уверена."""
+        if raw is None or isinstance(raw, (dict, bool)):
+            return []
+        items = raw if isinstance(raw, list) else re.split(r'[,;]', str(raw)) if self.max_values > 1 else [raw]
+        out: list[str] = []
+        for it in items:
+            v = self.canonical_value(it)
+            if v and v not in out:
+                out.append(v)
+        return out[:self.max_values]
+
     def emoji_for(self, value: str | None) -> str:
-        if not value:
-            return ''
-        return self.values.get(value, '') if self.values else self.emoji
+        """Эмодзи значения; у нескольких значений через запятую (`рок,вечеринка`) — эмодзи подряд.
+        Нет значения — fallback_emoji профиля."""
+        parts = [v.strip() for v in str(value).split(',') if v.strip()] if value else []
+        if not parts:
+            return self.fallback_emoji
+        got = [self.values.get(v, '') if self.values else self.emoji for v in parts]
+        return ''.join(e for e in got if e) or self.fallback_emoji      # значение убрали из списка (до пересчёта): общий эмодзи
 
 
 DEFAULT_PROFILES: dict[str, dict] = {
     'Концерты': {
         'attr_name': 'жанр',
-        'values': {'рок': '🎸', 'метал': '🤘', 'поп': '🎤', 'хип-хоп': '🎙', 'электроника': '🎧', 'джаз/блюз': '🎷',
-                   'классика': '🎻', 'фолк': '🪕', 'народная': '🪗'},
+        'max_values': 2,
+        'fallback_emoji': '🎵',
+        'values': {'рок': '🎸', 'метал': '🤘', 'панк': '⚡', 'инди': '📼', 'поп': '⭐', 'хип-хоп': '🎤',
+                   'электроника': '🎛', 'вечеринка': '🪩', 'джаз': '🎷', 'блюз': '🎺', 'классика': '🎻',
+                   'фолк': '🪕', 'народная': '🪗', 'этно': '🌍'},
+        'version': 'v2',
         'rules': ('Название — исполнитель или группа на первом месте (как в источнике); если выступают несколько, '
                   'первые двое-трое через запятую. Названия туров, «концерт», «live», «Beograd» не нужны. '
-                  'Жанр определяй по описанию и по тому, что знаешь об исполнителе; «народная» — сербская и балканская '
-                  'эстрада и фолк-поп (севдалинка, турбо-фолк); если жанр неясен или это вечеринка/диджей-сет без '
-                  'явного жанра — null.'),
+                  'Жанр определяй по описанию и по тому, что знаешь об исполнителе. Что к чему относится: '
+                  'рок — рок, хард-рок, готик-кантри; метал — метал, хеви, дэт, трэш; '
+                  'панк — панк, хардкор, ска-панк, а также альтернатива и пост-рок; '
+                  'инди — инди, синтипоп, дрим-поп, шугейз; поп — поп, поп-рок, небалканская эстрада; '
+                  'хип-хоп — рэп и хип-хоп; электроника — техно, хаус, drum\'n\'bass и электронные лайвы; '
+                  'вечеринка — диджей-сеты, диско, клубные ночи; джаз — джаз, джаз-фанк, соул; блюз — блюз и блюз-рок; '
+                  'классика — классика, фортепиано, камерная музыка; фолк — фолк и кантри; '
+                  'этно — world music и реггей. Балканская эстрада, турбофолк и севдалинка — ВСЕГДА «народная», не «поп». '
+                  'Диджей-сет и клубная ночь — ВСЕГДА «вечеринка», даже если играют электронику. '
+                  'Второй жанр добавляй только если он прямо указан в данных (например, рок-группа на клубной вечеринке: '
+                  '["рок", "вечеринка"]); основной жанр первым; если сомневаешься, давай один или пустой список.'),
     },
     'Кино/Театр': {
         'attr_name': 'формат',
@@ -130,6 +163,13 @@ DEFAULT_PROFILES: dict[str, dict] = {
 }
 
 
+def _int(value, default: int, low: int, high: int) -> int:
+    try:
+        return min(max(int(value), low), high)
+    except (TypeError, ValueError):
+        return default
+
+
 def _version(value, default: str) -> str:
     s = str(value).strip() if value not in (None, '') else ''
     return s or default
@@ -150,6 +190,8 @@ def _profile(name: str, base: dict, over: dict | None) -> Profile:
         emoji=str(d.get('emoji') or '').strip(),
         rules=str(d.get('rules') or '').strip(),
         version=_version(d.get('version'), 'v1'),
+        max_values=_int(d.get('max_values'), 1, 1, 3),
+        fallback_emoji=str(d.get('fallback_emoji') or '').strip(),
     )
 
 

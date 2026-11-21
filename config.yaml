@@ -210,6 +210,21 @@ card_lines:
   title_max: 40
   emoji: true
   show_value: true
+  hooks:
+    method: off          # off | on; сначала выкатываем выключенным
+    hook_max: 80
+    min_description_chars: 40
+    enrich:
+      method: off        # off | on
+      sources: [ musicbrainz, wikipedia ]
+      languages: [ ru, en, sr ]
+      contact: "xoxig64518@anonmart.com"   # обязательно заполнить: идёт в User-Agent
+      timeout: 10
+      ttl_found_days: 90
+      ttl_missing_days: 14
+      ttl_ambiguous_days: 30
+      retry_hours: 6
+      mb_min_interval: 1.1
 
 event_reviews:                  # чистка пересмотренных админом записей
   only_resolved: true           # чистить только разобранные
