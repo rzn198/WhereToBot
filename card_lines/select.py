@@ -76,7 +76,7 @@ async def select_candidates(pool, st: CardLineSettings, *, today: date, horizon_
     now = datetime.now(timezone.utc)
     for r in rows:
         prof = profile_for(r['event_types'], st.profiles)
-        if prof is None:
+        if prof is None or (st.only_profiles and prof.name not in st.only_profiles):
             sel.no_profile += 1
             continue
         c = Candidate(kind=r['kind'], id=r['id'], title=r['title'] or '', body=r['body'], venue=r['venue'], profile=prof)

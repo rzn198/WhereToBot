@@ -111,10 +111,13 @@ class CardLineSettings:
     max_retries: int = 3
     continue_seconds: float = 60        # пауза до следующего прохода, если упёрлись в max_calls_per_run
     run_on_start: bool = True
+    auto: bool = True                   # false: сервис сам ничего не считает (только вручную: scripts/card_lines_run.py); бот строки показывает
     after_dedup: bool = True            # брать только записи, уже обработанные дедупликатором (дубли не тратят запросы)
     alerts: bool = True
     emoji: bool = True                  # эмодзи в начале строки (по значению атрибута)
     show_value: bool = True             # слово значения (жанр) после названия
+    horizon_days: int | None = None     # сколько дней вперёд считать строки (0 = только сегодня, 1 = сегодня и завтра); None — как показывает бот
+    only_profiles: tuple[str, ...] = () # считать строки только для этих категорий (пусто — для всех)
     profiles: dict[str, Profile] = field(default_factory=dict)
     hooks: HookSettings = field(default_factory=HookSettings)
 
@@ -132,6 +135,19 @@ class CardLineSettings:
         return self.method == 'on' and self.hooks.enabled
 
 
+def _horizon(v) -> int | None:
+    try:
+        return None if v is None or v == '' else max(0, min(int(v), 1000))
+    except (TypeError, ValueError):
+        return None
+
+
+def _names(v) -> tuple[str, ...]:
+    from shared.categories import normalize_category
+    items = v if isinstance(v, (list, tuple)) else [v] if isinstance(v, str) else []
+    return tuple(dict.fromkeys(normalize_category(str(x)) for x in items if str(x).strip()))
+
+
 def card_line_settings(cfg: dict | None) -> CardLineSettings:
     c = cfg or {}
     d = CardLineSettings()
@@ -146,10 +162,13 @@ def card_line_settings(cfg: dict | None) -> CardLineSettings:
         max_retries=_int(c.get('max_retries'), d.max_retries, 0, 20),
         continue_seconds=_float(c.get('continue_seconds'), d.continue_seconds, 5.0),
         run_on_start=_bool(c.get('run_on_start'), d.run_on_start),
+        auto=_bool(c.get('auto'), d.auto),
         after_dedup=_bool(c.get('after_dedup'), d.after_dedup),
         alerts=_bool(c.get('alerts'), d.alerts),
         emoji=_bool(c.get('emoji'), d.emoji),
         show_value=_bool(c.get('show_value'), d.show_value),
+        horizon_days=_horizon(c.get('horizon_days')),
+        only_profiles=_names(c.get('only_profiles')),
         profiles=build_profiles(c.get('profiles')),
         hooks=hook_settings(c.get('hooks')),
     )

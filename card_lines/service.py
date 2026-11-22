@@ -123,17 +123,18 @@ def make_chunks(todo: list[Candidate], batch_size: int) -> list[list[Candidate]]
 
 
 async def run_pass(pool, client, st: CardLineSettings, *, city: str | None = None, horizon_days: int | None = None,
-                   today=None, fails: Counter | None = None, enricher=None) -> PassResult:
+                   today=None, fails: Counter | None = None, enricher=None, force: bool = False) -> PassResult:
     res = PassResult()
     if not st.enabled:
         res.status = 'off'
         return res
     city = city or DEFAULT_CITY
     if horizon_days is None:
-        horizon_days = config_horizon_days()
+        horizon_days = st.horizon_days if st.horizon_days is not None else config_horizon_days()
     fails = fails if fails is not None else Counter()
 
-    sel = await select_candidates(pool, st, today=today or belgrade_today(), horizon_days=horizon_days, city=city)
+    sel = await select_candidates(pool, st, today=today or belgrade_today(), horizon_days=horizon_days, city=city,
+                                  include_done=force)
     todo = [c for c in sel.todo if fails[c.key] < MAX_FAILS]
     res.candidates = len(todo)
     res.by_profile = Counter(c.profile.name for c in todo)
@@ -150,7 +151,7 @@ async def run_pass(pool, client, st: CardLineSettings, *, city: str | None = Non
         logger.warning(f"CARD_LINES_SKIP | {res.error}")
         return res
 
-    copied = await store.copy_by_hash(pool, todo, PROMPT_VERSION)
+    copied = set() if force else await store.copy_by_hash(pool, todo, PROMPT_VERSION)
     if copied:
         res.copied = len(copied)
         todo = [c for c in todo if c.key not in copied]
@@ -250,6 +251,9 @@ class CardLinesHook:
 
     def trigger(self, reason: str) -> bool:
         if not self.st.enabled:
+            return False
+        if not self.st.auto:
+            logger.info(f"CARD_LINES_MANUAL | reason={reason} | card_lines.auto: false, сервис ничего не считает")
             return False
         if self.running:
             self._again = True
