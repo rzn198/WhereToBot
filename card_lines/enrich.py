@@ -29,6 +29,7 @@ from card_lines.settings import EnrichSettings
 MB_URL = 'https://musicbrainz.org/ws/2/artist/'
 WP_URL = 'https://{lang}.wikipedia.org/w/api.php'
 MAX_FACTS_CHARS = 900
+GENERIC_TITLES = {'koncert', 'koncerti', 'concert', 'concerts', 'концерт', 'концерты', 'музыка', 'live', 'live music', 'dj set'}
 
 _MUSIC = re.compile(
     r'групп|музык|певец|певиц|исполнител|композитор|рэпер|диджей|гитарист|пианист|скрипач|дуэт|оркестр|ансамбл|хор\b|'
@@ -137,8 +138,9 @@ class Enricher:
                 raise EnrichUnavailable(f"{host}: {type(e).__name__}") from e
         if r.status_code == 429 or r.status_code >= 500:
             raise EnrichUnavailable(f"{host}: HTTP {r.status_code}")
-        if r.status_code >= 400:
-            raise EnrichUnavailable(f"{host}: HTTP {r.status_code}")
+        if r.status_code >= 400:                  # плохой запрос (например, странное название): это «не найдено», а не сбой сети
+            logger.info(f"ENRICH_HTTP_{r.status_code} | {host} | {params.get('query') or params.get('titles')}")
+            return {}
         try:
             data = r.json()
         except ValueError as e:
@@ -179,7 +181,7 @@ class Enricher:
         return '; '.join(bits)
 
     async def _musicbrainz(self, name: str, hint: str) -> Lookup:
-        data = await self._get(MB_URL, {'query': f'artist:"{name}"', 'fmt': 'json', 'limit': '5'}, 'mb')
+        data = await self._get(MB_URL, {'query': 'artist:"' + name.replace('\\', ' ').replace('"', ' ') + '"', 'fmt': 'json', 'limit': '5'}, 'mb')
         exact = [a for a in data.get('artists') or []
                  if isinstance(a, dict) and fold(a.get('name') or '') == fold(name) and int(a.get('score') or 0) >= 90]
         if not exact:
@@ -235,7 +237,7 @@ class Enricher:
         if kind != 'artist':
             return None
         names = artist_names(title)
-        if not names:
+        if not names or len(names[0].split()) > 6 or fold(names[0]) in GENERIC_TITLES:
             return None
         name = names[0]
         key_name = fold(name)

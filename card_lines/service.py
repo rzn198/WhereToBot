@@ -97,12 +97,13 @@ async def finish_hook(client, c: Candidate, parts: Parts, st: CardLineSettings, 
         return parts, 'retry', '', 1
     try:
         p2 = parse_single(raw, c, st.input_chars, st.title_max, hs, facts.text)
-    except BadCardLine:
-        return parts, 'invalid', '', 1
+    except BadCardLine as e:
+        return replace(parts, hook_error=f"второй запрос: {e}"), 'invalid', '', 1
     if p2.hook is not None:
         return (replace(parts, hook=p2.hook, hook_status='ok', enough=p2.enough, text_time=parts.text_time or p2.text_time),
                 'ok', facts.url if p2.hook.source == 'web' else '', 1)
-    return parts, ('invalid' if p2.hook_status == 'invalid' else 'none'), '', 1
+    return (replace(parts, hook_error=p2.hook_error) if p2.hook_status == 'invalid' else parts,
+            ('invalid' if p2.hook_status == 'invalid' else 'none'), '', 1)
 
 
 def make_chunks(todo: list[Candidate], batch_size: int) -> list[list[Candidate]]:

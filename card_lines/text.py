@@ -193,18 +193,39 @@ def build_batch_prompt(cands: list[Candidate], input_chars: int, title_max: int,
     return out
 
 
+def _trim_quotes(t: str) -> str:
+    """Снимает кавычки, обрамляющие всё название, и лишние одиночные; парные внутри названия («Коло») не трогает."""
+    pairs = {'«': '»', '„': '“', '“': '”', '"': '"', "'": "'", '`': '`'}
+    t = t.strip()
+    while len(t) >= 2 and t[0] in pairs and t[-1] == pairs[t[0]] and not any(q in t[1:-1] for q in _QUOTES):
+        t = t[1:-1].strip()
+    t = t.lstrip('»”').rstrip('«„').strip()
+    if t[:1] in ('"', "'", '`') and t.count(t[0]) == 1:
+        t = t[1:].strip()
+    if t[-1:] in ('"', "'", '`') and t.count(t[-1]) == 1:
+        t = t[:-1].strip()
+    if t.count('«') > t.count('»'):
+        t += '»'
+    elif t.count('»') > t.count('«'):
+        t = t.replace('»', '', 1).strip()
+    return t
+
+
 def check_title(raw, source: str, title_max: int) -> str:
     """Название после проверки или BadCardLine."""
     if not isinstance(raw, str):
         raise BadCardLine(f"title не строка: {raw!r}")
-    t = _SPACES.sub(' ', raw.replace('\n', ' ')).strip().strip(_QUOTES).strip()
-    t = _SPACES.sub(' ', _EMOJI.sub('', t)).strip()
+    t = _SPACES.sub(' ', raw.replace('\n', ' ')).strip()
+    t = _SPACES.sub(' ', _EMOJI.sub('', _trim_quotes(t))).strip()
     if len(t) < 2:
         raise BadCardLine("пустое название")
     if len(t) > title_max * 2:
         raise BadCardLine(f"название слишком длинное ({len(t)})")
     if _URL_OR_TAG.search(t):
         raise BadCardLine(f"ссылка или тег в названии: {t!r}")
+    from card_lines.hooks import foreign_script
+    if foreign_script(t):
+        raise BadCardLine(f"посторонний символ в названии: {t!r}")
     folded = fold(source)
     for w in _LATIN_WORD.findall(t):
         if fold(w) not in folded:

@@ -24,6 +24,29 @@ _LATIN_WORD = re.compile(r'[A-Za-zÀ-žĐđ]{4,}')
 _NUMBER = re.compile(r'\d+')
 _DASH_PREFIX = re.compile(r'^\s*[—–-]\s*')
 
+
+def foreign_script(text: str) -> str | None:
+    """Первый символ не из кириллицы/латиницы/цифр/обычной пунктуации (иероглифы, арабица и т. п. от сбоя модели) или None."""
+    for ch in text:
+        o = ord(ch)
+        if o < 0x250 or 0x400 <= o <= 0x4FF or 0x2000 <= o <= 0x206F or ch in '№€₽…':
+            continue
+        return ch
+    return None
+
+
+def balance_quotes(t: str) -> str:
+    """Убирает одиночные кавычки без пары: «Четыре времени года -> Четыре времени года."""
+    while t.count('«') > t.count('»'):
+        i = t.rfind('«') if t.endswith('«') else t.find('«')
+        t = (t[:i] + t[i + 1:]).strip()
+    while t.count('»') > t.count('«'):
+        i = t.find('»')
+        t = (t[:i] + t[i + 1:]).strip()
+    if t.count('"') % 2:
+        t = t.replace('"', '', 1) if t.startswith('"') else t[::-1].replace('"', '', 1)[::-1]
+    return t.strip()
+
 # корень в хуке (по-русски) -> подтверждающие фрагменты в цитате (русский, английский, сербский)
 WATCH: dict[str, tuple[str, ...]] = {
     'впервые': ('впервые', 'first time', 'prvi put', 'prvi nastup', 'debi', 'premijer', 'premiere'),
@@ -78,6 +101,10 @@ def check_hook(obj: dict, *, title: str, formulas: tuple[Formula, ...], hook_max
     t = str(title or '').strip()
     if t and fold(hook).startswith(fold(t)):                      # хук идёт после «Название — », название повторять не нужно
         hook = _DASH_PREFIX.sub('', hook[len(t):]).strip()
+    hook = balance_quotes(_DASH_PREFIX.sub('', hook))
+    bad = foreign_script(hook)
+    if bad:
+        raise BadHook(f"посторонний символ {bad!r}")
     if len(hook) < 4:
         raise BadHook("хук слишком короткий")
     if len(hook) > hook_max:

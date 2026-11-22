@@ -413,3 +413,39 @@ def test_line_time_from_text_only_when_db_time_empty_and_long_hook_capped():
     assert w.line_text(item(time=time(21, 0), ai_time=time(20, 0)), wst, on).endswith('· 21:00')
     long = w.line_text(item(ai_hook='я' * 200), wst, on)
     assert len(long) <= w.LINE_CAP + 12
+
+
+# ------------------------------------------------------------------ багфиксы по прогону на реальных концертах
+
+def test_hook_rejects_foreign_script_and_cleans_dash_and_quotes():
+    ev = {'formula': 1, 'evidence': 'povodom 20 godina karijere'}
+    with pytest.raises(BadHook):
+        chk({'hook': 'юбилей со向社会 20 лет', **ev})
+    h = chk({'hook': '— юбилей: 20 лет на сцене', **ev})
+    assert h.text == 'юбилей: 20 лет на сцене'
+    h = chk({'hook': '20 лет на сцене, «Dubioza', **ev})
+    assert '«' not in h.text
+
+
+def test_title_keeps_paired_quotes_and_closes_missing_one():
+    from card_lines.text import check_title
+    src = 'Хор «Белградские мадригалисты» и ансамбль «Коло»'
+    assert check_title('Хор «Белградские мадригалисты»', src, 40) == 'Хор «Белградские мадригалисты»'
+    assert check_title('Хор «Белградские мадригалисты', src, 40) == 'Хор «Белградские мадригалисты»'
+    assert check_title('«Коло»', src, 40) == 'Коло'
+    assert check_title('"Коло"', src, 40) == 'Коло'
+    with pytest.raises(Exception):
+        check_title('Коло 向社会', src + ' 向社会', 40)
+
+
+async def test_http_400_is_not_found_not_retry_and_generic_title_skipped():
+    seen = []
+
+    def h(req):
+        seen.append(str(req.url))
+        return httpx.Response(400) if 'musicbrainz' in req.url.host else wp([{'missing': True}])
+    e = enricher(h)
+    assert await e.facts_for('artist', 'Концерт националног ансамбла "КОЛО"') is None     # без EnrichUnavailable
+    n = len(seen)
+    assert await e.facts_for('artist', 'Концерты') is None and len(seen) == n               # общее название не ищем
+    assert await e.facts_for('artist', 'очень длинное название события из семи слов') is None and len(seen) == n
