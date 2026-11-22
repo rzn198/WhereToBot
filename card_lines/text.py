@@ -126,7 +126,8 @@ def _hook_block(p: Profile, hooks: HookSettings, with_facts: bool) -> str:
     ]
     for i, f in enumerate(p.formulas, 1):
         lines.append(f"  {i}. {f.name}. Нужно: {f.need}. Форма: {f.form}."
-                     + (" [можно по фактам из интернета]" if f.web and with_facts else ""))
+                     + (" [только по фактам из интернета: цитата обязана быть из блока фактов; без блока фактов формулу не используй]"
+                        if f.web_only else " [можно по фактам из интернета]" if f.web and with_facts else ""))
     lines += [
         "- \"evidence\": дословная цитата из данных (до 150 символов; несколько кусков соединяй «…»), на которой стоит хук. "
         "Без точной цитаты хук не принимается.",

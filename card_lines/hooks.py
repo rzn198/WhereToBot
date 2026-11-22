@@ -133,6 +133,8 @@ def check_hook(obj: dict, *, title: str, formulas: tuple[Formula, ...], hook_max
         raise BadHook("цитаты нет в источнике")
     if source == 'web' and not formulas[formula - 1].web:
         raise BadHook(f"факты из интернета не разрешены для формулы {formula}")
+    if formulas[formula - 1].web_only and source != 'web':
+        raise BadHook(f"формула {formula} только по фактам из интернета, цитата из описания не годится")
     ev_norm, title_norm = norm(evidence), norm(t)
     for n in _NUMBER.findall(hook):
         if n not in _NUMBER.findall(ev_norm) and n not in _NUMBER.findall(title_norm):

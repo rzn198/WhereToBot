@@ -201,8 +201,8 @@ card_lines:
   method: off                  # off | shadow | on
   models:
     - deepseek-v4.1-flash
-    - beam-free
     - hy4-flash-free
+    - beam-free
     - mimo-v2.6-flash
     - minimax-m3.1-flash
   batch_size: 1               # записей в одном запросе (пробуем 1 / 5 / 10 скриптом)

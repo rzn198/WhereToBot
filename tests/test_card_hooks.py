@@ -488,3 +488,13 @@ async def test_musicbrainz_503_is_retried_then_succeeds_or_unavailable():
         return httpx.Response(503) if 'musicbrainz' in req.url.host else wp([{'missing': True}])
     with pytest.raises(EnrichUnavailable):
         await enricher(down).facts_for('artist', 'Zoster')
+
+
+def test_web_only_formula_rejects_description_quote():
+    facts = 'MusicBrainz: Dubioza kolektiv; type: Group; origin: Bosnia and Herzegovina; tags: rock, ska'
+    # цитата из описания (по названию события) для формулы 5 не годится: так модели выдумывают «кто это»
+    with pytest.raises(BadHook):
+        chk({'hook': 'боснийская группа', 'formula': 5, 'evidence': 'Dubioza kolektiv. Prvi put u Srbiji'}, facts=facts)
+    ok = chk({'hook': 'боснийская группа', 'formula': 5, 'evidence': 'origin: Bosnia and Herzegovina'}, facts=facts)
+    assert ok.source == 'web'
+    assert F[4].web and F[4].web_only
