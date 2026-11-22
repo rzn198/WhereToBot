@@ -198,7 +198,8 @@ deduplication:
         - 'анонсы?\s+(?:на\s+)?недел'
 
 card_lines:
-  method: off                  # off | shadow | on
+  method: on                  # off | shadow | on
+  auto: false          # сервис сам ничего не считает, только твой скрипт
   models:
     - deepseek-v4.1-flash
     - hy4-flash-free
@@ -212,7 +213,7 @@ card_lines:
   emoji: true
   show_value: true
   hooks:
-    method: off          # off | on; сначала выкатываем выключенным
+    method: on          # off | on; сначала выкатываем выключенным
     hook_max: 80
     min_description_chars: 40
     enrich:

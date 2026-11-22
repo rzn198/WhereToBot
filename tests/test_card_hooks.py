@@ -498,3 +498,20 @@ def test_web_only_formula_rejects_description_quote():
     ok = chk({'hook': 'боснийская группа', 'formula': 5, 'evidence': 'origin: Bosnia and Herzegovina'}, facts=facts)
     assert ok.source == 'web'
     assert F[4].web and F[4].web_only
+
+
+@needs_pg
+async def test_force_recomputes_up_to_date_line_without_copying_itself(pool):
+    eid = await add_event(pool, 1, 'DUBIOZA KOLEKTIV', TEXT)
+    calls = []
+
+    def ai(req):
+        calls.append(1)
+        return reply({'title': 'Dubioza kolektiv', 'value': 'рок', 'hook': 'впервые в Сербии', 'formula': 1,
+                      'evidence': 'Prvi put u Srbiji nastupa bend'})
+    await run_pass(pool, make_client(ai), ST, city='Belgrade', horizon_days=30, today=TODAY)
+    again = await run_pass(pool, make_client(ai), ST, city='Belgrade', horizon_days=30, today=TODAY)
+    assert again.candidates == 0 and len(calls) == 1
+    forced = await run_pass(pool, make_client(ai), ST, city='Belgrade', horizon_days=30, today=TODAY, force=True)
+    assert forced.candidates == 1 and forced.generated == 1 and forced.copied == 0 and len(calls) == 2
+    assert (await row(pool, eid))['hook'] == 'впервые в Сербии'
