@@ -15,7 +15,7 @@
 Ключ: OPENCODE_CARDLINES_API_KEY.
 CSV: model, batch_size, profile, kind, id, source_title, source_text, title, value, status, error, latency_ms (задержка запроса,
 у пакета одна на все записи), call_size, tokens_in, tokens_out (по запросу),
-hook, hook_formula, hook_source (text|web), hook_status (ok|none|invalid|not_found|retry), hook_evidence, hook_url. В конце — сводка по каждой паре модель/пакет.
+hook, hook_formula, hook_source (text|web), hook_status (ok|none|invalid|not_found|retry), hook_evidence, hook_url, hook_error (почему хук отброшен проверкой). В конце — сводка по каждой паре модель/пакет.
 """
 from __future__ import annotations
 
@@ -43,7 +43,7 @@ from shared.tz import belgrade_today  # noqa: E402
 
 FIELDS = ['model', 'batch_size', 'profile', 'kind', 'id', 'source_title', 'source_text', 'title', 'value', 'status', 'error',
           'latency_ms', 'call_size', 'tokens_in', 'tokens_out', 'hook', 'hook_formula', 'hook_source', 'hook_status', 'hook_evidence',
-          'hook_url']
+          'hook_url', 'hook_error']
 
 
 def sample(cands, per_profile: int, profiles: set[str] | None, seed: int):
@@ -86,7 +86,7 @@ async def run_one(model: str, batch: int, cands, st, base_cfg: dict, concurrency
             hk = None if bad else p.hook
             rows.append({
                 'hook': hk.text if hk else '', 'hook_formula': hk.formula if hk else '', 'hook_source': hk.source if hk else '',
-                'hook_status': hstatus or '', 'hook_evidence': hk.evidence if hk else '', 'hook_url': hurl,
+                'hook_status': hstatus or '', 'hook_evidence': hk.evidence if hk else '', 'hook_url': hurl, 'hook_error': '' if bad else (p.hook_error or ''),
                 'model': model, 'batch_size': batch, 'profile': c.profile.name, 'kind': c.kind, 'id': c.id,
                 'source_title': c.title, 'source_text': (c.body or '').replace('\n', ' ')[:200],
                 'title': '' if bad else p.title, 'value': '' if bad else (p.value or ''),
