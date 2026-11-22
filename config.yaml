@@ -201,9 +201,10 @@ card_lines:
   method: off                  # off | shadow | on
   models:
     - deepseek-v4.1-flash
-    - glm-5.3-flash
-    - gpt-6-luna
     - beam-free
+    - hy4-flash-free
+    - mimo-v2.6-flash
+    - minimax-m3.1-flash
   batch_size: 1               # записей в одном запросе (пробуем 1 / 5 / 10 скриптом)
   max_calls_per_run: 1500     # запросов за проход; остальное в следующий
   concurrency: 3

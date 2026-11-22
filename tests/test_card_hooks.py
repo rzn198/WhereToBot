@@ -449,3 +449,42 @@ async def test_http_400_is_not_found_not_retry_and_generic_title_skipped():
     n = len(seen)
     assert await e.facts_for('artist', 'Концерты') is None and len(seen) == n               # общее название не ищем
     assert await e.facts_for('artist', 'очень длинное название события из семи слов') is None and len(seen) == n
+
+
+# ------------------------------------------------------------------ багфиксы по второму прогону
+
+def test_balance_quotes_respects_order():
+    from card_lines.hooks import balance_quotes
+    assert balance_quotes('Muštuluk», «Rano je» и «Kako') == 'Muštuluk, «Rano je» и Kako'
+    assert balance_quotes('«Четыре времени года') == 'Четыре времени года'
+    assert balance_quotes('песни «Frisson Noir»') == 'песни «Frisson Noir»'
+
+
+def test_hook_length_slack_and_inflected_latin_word():
+    ev = {'formula': 1, 'evidence': 'povodom 20 godina karijere'}
+    ok = chk({'hook': 'повод: 20 лет карьеры Dubioza, ' + 'а' * 60, **ev})          # 80 < длина ≤ 100: принимается
+    assert 80 < len(ok.text) <= 100
+    with pytest.raises(BadHook):
+        chk({'hook': 'повод: 20 лет карьеры Dubioza, ' + 'а' * 90, **ev})
+    t = "Program: antologijske operske arije i melodije španske zarzuele"
+    h = chk({'hook': 'арии и zarzuela', 'formula': 4, 'evidence': 'melodije španske zarzuele'}, text=t, title='X')
+    assert h.text == 'арии и zarzuela'
+
+
+async def test_musicbrainz_503_is_retried_then_succeeds_or_unavailable():
+    calls = []
+
+    def flaky(req):
+        if 'musicbrainz' in req.url.host:
+            calls.append(1)
+            if len(calls) < 3:
+                return httpx.Response(503)
+            return mb([{'id': 'z', 'name': 'Zoster', 'score': 100, 'type': 'Group', 'tags': [{'name': 'rock', 'count': 1}]}])
+        return wp([{'missing': True}])
+    f = await enricher(flaky).facts_for('artist', 'Zoster')
+    assert f and len(calls) == 3
+
+    def down(req):
+        return httpx.Response(503) if 'musicbrainz' in req.url.host else wp([{'missing': True}])
+    with pytest.raises(EnrichUnavailable):
+        await enricher(down).facts_for('artist', 'Zoster')

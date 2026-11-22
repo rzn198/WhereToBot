@@ -121,31 +121,45 @@ class Enricher:
             self._client = None
 
     async def _get(self, url: str, params: dict, host: str) -> dict:
-        """GET JSON с лимитом частоты по хосту (MusicBrainz ≥ mb_min_interval секунд между запросами)."""
+        """GET JSON с лимитом частоты по хосту (MusicBrainz ≥ mb_min_interval секунд между запросами).
+        На 429/503 (MusicBrainz так отвечает при перегрузке) повторяем с паузой (Retry-After или 3, 8 с); потом EnrichUnavailable."""
         interval = self.st.mb_min_interval if host == 'mb' else 0.1
-        async with self._lock('http:' + host):
-            wait = self._last.get(host, -1e9) + interval - self._clock()
-            if wait > 0:
-                await self._sleep(wait)
-            if self._client is None:
-                self._client = httpx.AsyncClient(timeout=self.st.timeout, transport=self._transport,
-                                                 headers={'User-Agent': self.user_agent, 'Accept': 'application/json'})
-            self._last[host] = self._clock()
-            self.stats['requests'] += 1
+        last = ''
+        for attempt, pause in enumerate((0, 3, 8)):
+            if pause:
+                await self._sleep(min(pause, 30))
+            async with self._lock('http:' + host):
+                wait = self._last.get(host, -1e9) + interval - self._clock()
+                if wait > 0:
+                    await self._sleep(wait)
+                if self._client is None:
+                    self._client = httpx.AsyncClient(timeout=self.st.timeout, transport=self._transport,
+                                                     headers={'User-Agent': self.user_agent, 'Accept': 'application/json'})
+                self._last[host] = self._clock()
+                self.stats['requests'] += 1
+                try:
+                    r = await self._client.get(url, params=params)
+                except httpx.HTTPError as e:
+                    last = f"{host}: {type(e).__name__}"
+                    continue
+            if r.status_code == 429 or r.status_code >= 500:
+                last = f"{host}: HTTP {r.status_code}"
+                try:
+                    pause_hdr = float(r.headers.get('retry-after', ''))
+                except ValueError:
+                    pause_hdr = 0
+                if pause_hdr and attempt < 2:
+                    await self._sleep(min(pause_hdr, 30))
+                continue
+            if r.status_code >= 400:              # плохой запрос (например, странное название): это «не найдено», а не сбой сети
+                logger.info(f"ENRICH_HTTP_{r.status_code} | {host} | {params.get('query') or params.get('titles')}")
+                return {}
             try:
-                r = await self._client.get(url, params=params)
-            except httpx.HTTPError as e:
-                raise EnrichUnavailable(f"{host}: {type(e).__name__}") from e
-        if r.status_code == 429 or r.status_code >= 500:
-            raise EnrichUnavailable(f"{host}: HTTP {r.status_code}")
-        if r.status_code >= 400:                  # плохой запрос (например, странное название): это «не найдено», а не сбой сети
-            logger.info(f"ENRICH_HTTP_{r.status_code} | {host} | {params.get('query') or params.get('titles')}")
-            return {}
-        try:
-            data = r.json()
-        except ValueError as e:
-            raise EnrichUnavailable(f"{host}: не JSON") from e
-        return data if isinstance(data, dict) else {}
+                data = r.json()
+            except ValueError as e:
+                raise EnrichUnavailable(f"{host}: не JSON") from e
+            return data if isinstance(data, dict) else {}
+        raise EnrichUnavailable(last or f"{host}: недоступен")
 
     # --- MusicBrainz
 
