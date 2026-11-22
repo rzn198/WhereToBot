@@ -89,8 +89,8 @@ async def main() -> None:
     start = date.fromisoformat(args.start) if args.start else belgrade_today()
     pool = await init_db_pool()
     try:
-        hint = (f"{start} + {args.days} дн., категории: {list(st.only_profiles) or 'все'}, хуки: {st.hooks.method}, "
-                f"интернет: {st.hooks.enrich.method}, force={args.force}")
+        hint = (f"{start} + {args.days} дн., категории: {list(st.only_profiles) or 'все'}, хуки: {'on' if st.hooks.enabled else 'off'}, "
+                f"интернет: {'on' if st.hooks.enrich.enabled else 'off'}, force={args.force}")
         if args.dry_run:
             sel = await select_candidates(pool, st, today=start, horizon_days=args.days - 1, city=DEFAULT_CITY,
                                           include_done=args.force)
