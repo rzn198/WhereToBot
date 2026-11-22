@@ -36,16 +36,22 @@ def foreign_script(text: str) -> str | None:
 
 
 def balance_quotes(t: str) -> str:
-    """Убирает одиночные кавычки без пары: «Четыре времени года -> Четыре времени года."""
-    while t.count('«') > t.count('»'):
-        i = t.rfind('«') if t.endswith('«') else t.find('«')
-        t = (t[:i] + t[i + 1:]).strip()
-    while t.count('»') > t.count('«'):
-        i = t.find('»')
-        t = (t[:i] + t[i + 1:]).strip()
+    """Убирает кавычки без пары с учётом порядка: «Muštuluk», «Rano -> лишние » в начале и « в конце снимаются."""
+    drop: set[int] = set()
+    stack: list[int] = []
+    for i, ch in enumerate(t):
+        if ch == '«':
+            stack.append(i)
+        elif ch == '»':
+            if stack:
+                stack.pop()
+            else:
+                drop.add(i)
+    drop.update(stack)
+    t = ''.join(ch for i, ch in enumerate(t) if i not in drop)
     if t.count('"') % 2:
         t = t.replace('"', '', 1) if t.startswith('"') else t[::-1].replace('"', '', 1)[::-1]
-    return t.strip()
+    return re.sub(r'\s+', ' ', t).strip(' ,;:')
 
 # корень в хуке (по-русски) -> подтверждающие фрагменты в цитате (русский, английский, сербский)
 WATCH: dict[str, tuple[str, ...]] = {
@@ -107,8 +113,9 @@ def check_hook(obj: dict, *, title: str, formulas: tuple[Formula, ...], hook_max
         raise BadHook(f"посторонний символ {bad!r}")
     if len(hook) < 4:
         raise BadHook("хук слишком короткий")
-    if len(hook) > hook_max:
-        raise BadHook(f"хук длиннее {hook_max} ({len(hook)})")
+    limit = hook_max + hook_max // 4                # модели почти всегда чуть превышают лимит; длинное при показе всё равно обрезается
+    if len(hook) > limit:
+        raise BadHook(f"хук длиннее {limit} ({len(hook)})")
     if _URL_OR_TAG.search(hook):
         raise BadHook("ссылка или тег в хуке")
     try:
@@ -136,7 +143,8 @@ def check_hook(obj: dict, *, title: str, formulas: tuple[Formula, ...], hook_max
             raise BadHook(f"«{stem}…» без подтверждения в цитате")
     source_fold = fold(f"{text}\n{facts}")
     for w in _LATIN_WORD.findall(hook):
-        if fold(w) not in source_fold:
+        fw = fold(w)
+        if fw not in source_fold and fw[:max(4, len(fw) - 2)] not in source_fold:      # падежные окончания: zarzuela / zarzuele
             raise BadHook(f"слова {w!r} нет в источнике")
     return Hook(hook, formula, evidence, source)
 
