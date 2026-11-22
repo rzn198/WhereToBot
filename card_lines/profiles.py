@@ -7,7 +7,7 @@
   rules     — правила для модели именно для этой категории (добавляются в промпт);
   version   — версия правил профиля; её смена пересчитывает строки только этой категории;
   max_values — сколько значений атрибута можно дать одной записи (по умолчанию 1; у «Концертов» 2: основной жанр первым);
-  formulas  — формулы хука по приоритету (name, need, form, web); пусто — хука у категории нет; hook_rules — доп. правила хука;
+  formulas  — формулы хука по приоритету (name, need, form, web, web_only); пусто — хука у категории нет; hook_rules — доп. правила хука;
   enrich    — вид обогащения фактами из интернета ('artist'); пусто — без обогащения;
   fallback_emoji — эмодзи записи, когда значение не определено (у «Концертов» 🎵; пусто — без эмодзи);
   ai        — false: профиль без ИИ (строка из данных БД, например музеи).
@@ -31,6 +31,7 @@ class Formula:
     need: str                       # какие факты должны быть в данных
     form: str                       # форма фразы
     web: bool = False               # можно ли опираться на факты из интернета (устойчивые: кто это, страна, жанр, годы)
+    web_only: bool = False          # формула строится ТОЛЬКО по фактам из интернета (цитата обязана быть в них, не в описании)
 
 
 @dataclass(frozen=True)
@@ -62,7 +63,7 @@ class Profile:
         """Меняется при правке формул/правил хука/вида обогащения: записи пересчитываются."""
         import hashlib
         import json
-        raw = json.dumps([[f.name, f.need, f.form, f.web] for f in self.formulas] + [self.hook_rules, self.enrich],
+        raw = json.dumps([[f.name, f.need, f.form, f.web, f.web_only] for f in self.formulas] + [self.hook_rules, self.enrich],
                          ensure_ascii=False)
         return hashlib.md5(raw.encode('utf-8')).hexdigest()[:10]
 
@@ -130,7 +131,7 @@ DEFAULT_PROFILES: dict[str, dict] = {
              'form': '[Артист] — [что ждёт на концерте]'},
             {'name': 'кто это',
              'need': 'известны только устойчивые факты об исполнителе (тип, страна или город, жанр, годы), повода и программы нет',
-             'form': '[Артист] — [кто это: страна или город, жанр, чем известен]', 'web': True},
+             'form': '[Артист] — [кто это: страна или город, жанр, чем известен]', 'web': True, 'web_only': True},
         ],
         'rules': ('Название — исполнитель или группа на первом месте (как в источнике); если выступают несколько, '
                   'первые двое-трое через запятую. Названия туров, «концерт», «live», «Beograd» не нужны. '
@@ -226,7 +227,8 @@ def _formulas(raw) -> tuple[Formula, ...]:
     for f in raw if isinstance(raw, list) else []:
         if isinstance(f, dict) and str(f.get('name') or '').strip():
             out.append(Formula(name=str(f['name']).strip(), need=str(f.get('need') or '').strip(),
-                               form=str(f.get('form') or '').strip(), web=_bool(f.get('web'))))
+                               form=str(f.get('form') or '').strip(), web=_bool(f.get('web')) or _bool(f.get('web_only')),
+                               web_only=_bool(f.get('web_only'))))
     return tuple(out)
 
 
