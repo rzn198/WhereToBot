@@ -22,6 +22,8 @@ _URL_OR_TAG = re.compile(r'https?://|www\.|t\.me/|[@#]\w', re.I)
 _EMOJI = re.compile('[\U0001F000-\U0001FFFF☀-➿️‍]')
 _LATIN_WORD = re.compile(r'[A-Za-zÀ-žĐđ]{4,}')
 _NUMBER = re.compile(r'\d+')
+_SERB_CYR = re.compile(r'[јљњћђџЈЉЊЋЂЏ]')
+_WORD = re.compile(r"[A-Za-zÀ-žĐđА-Яа-яЁёјљњћђџЈЉЊЋЂЏ]{2,}")
 _DASH_PREFIX = re.compile(r'^\s*[—–-]\s*')
 
 
@@ -32,6 +34,22 @@ def foreign_script(text: str) -> str | None:
         if o < 0x250 or 0x400 <= o <= 0x4FF or 0x2000 <= o <= 0x206F or ch in '№€₽…':
             continue
         return ch
+    return None
+
+
+def not_russian_word(hook: str, title: str) -> str | None:
+    """Хук пишется по-русски; на оригинале остаются только имена и названия. Возвращает первое слово «не по-русски» или None:
+    слово с сербскими буквами (ј, љ, њ, ћ, ђ, џ), если оно строчное или стоит первым; латинское слово с маленькой буквы,
+    которого нет в названии (описательное «albuma», «promocija»)."""
+    title_fold = fold(title)
+    for i, m in enumerate(_WORD.finditer(hook)):
+        w = m.group(0)
+        if fold(w) in title_fold:
+            continue
+        if _SERB_CYR.search(w) and (w[0].islower() or i == 0):
+            return w
+        if w[0].islower() and re.match(r'[A-Za-zÀ-žĐđ]', w) and len(w) >= 4:
+            return w
     return None
 
 
@@ -113,6 +131,9 @@ def check_hook(obj: dict, *, title: str, formulas: tuple[Formula, ...], hook_max
         raise BadHook(f"посторонний символ {bad!r}")
     if len(hook) < 4:
         raise BadHook("хук слишком короткий")
+    foreign = not_russian_word(hook, t)
+    if foreign:
+        raise BadHook(f"слово {foreign!r} не по-русски")
     limit = hook_max + hook_max // 4                # модели почти всегда чуть превышают лимит; длинное при показе всё равно обрезается
     if len(hook) > limit:
         raise BadHook(f"хук длиннее {limit} ({len(hook)})")
