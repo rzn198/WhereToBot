@@ -199,7 +199,7 @@ deduplication:
 
 card_lines:
   method: on                  # off | shadow | on
-  auto: false          # сервис сам ничего не считает, только твой скрипт
+  auto: true          # сервис сам ничего не считает, только твой скрипт
   models:
     - deepseek-v4.1-flash
     - hy4-flash-free
