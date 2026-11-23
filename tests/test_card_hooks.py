@@ -467,8 +467,21 @@ def test_hook_length_slack_and_inflected_latin_word():
     with pytest.raises(BadHook):
         chk({'hook': 'повод: 20 лет карьеры Dubioza, ' + 'а' * 90, **ev})
     t = "Program: antologijske operske arije i melodije španske zarzuele"
-    h = chk({'hook': 'арии и zarzuela', 'formula': 4, 'evidence': 'melodije španske zarzuele'}, text=t, title='X')
-    assert h.text == 'арии и zarzuela'
+    h = chk({'hook': 'арии и Zarzuela', 'formula': 4, 'evidence': 'melodije španske zarzuele'}, text=t, title='X')
+    assert h.text == 'арии и Zarzuela'
+
+
+def test_hook_must_be_russian_not_serbian():
+    t = "Plattenbau promocija albuma Cursed. Post-punk iz Berlina."
+    ev = {'formula': 1, 'evidence': 'promocija albuma Cursed'}
+    for bad in ('промоција албума Cursed', 'promocija albuma Cursed', 'презентација альбома Cursed'):
+        with pytest.raises(BadHook):
+            chk({'hook': bad, **ev}, text=t, title='Plattenbau')
+    h = chk({'hook': 'пост-панк, презентация альбома Cursed', **ev}, text=t, title='Plattenbau')
+    assert h.text == 'пост-панк, презентация альбома Cursed'
+    h = chk({'hook': 'рок, песни Бајаге', 'formula': 4, 'evidence': 'Post-punk iz Berlina'.replace('Post-punk iz Berlina', 'promocija albuma Cursed')},
+            text=t, title='Plattenbau')
+    assert h.text.startswith('рок')
 
 
 async def test_musicbrainz_503_is_retried_then_succeeds_or_unavailable():
