@@ -217,7 +217,7 @@ card_lines:
     hook_max: 80
     min_description_chars: 40
     enrich:
-      method: off        # off | on
+      method: on        # off | on
       sources: [ musicbrainz, wikipedia ]
       languages: [ ru, en, sr ]
       contact: "xoxig64518@anonmart.com"   # обязательно заполнить: идёт в User-Agent
