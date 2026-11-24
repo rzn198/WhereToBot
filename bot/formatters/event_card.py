@@ -27,8 +27,9 @@ PREVIEW_SUFFIX = 'Полное описание события⬇️⬇️⬇️
 FULL_DESCRIPTION_LIMIT = 3000      # запас до 4096 символов сообщения
 CAPTION_LIMIT = 1024               # лимит подписи к фото
 
-# перевод description_ru хранится как Markdown: экранированный текст + ссылка
-_RU_LINK_TAIL = re.compile(r'\s*\[[^\]]*\]\([^)]*\)\s*$')
+# Новый description_ru — чистый перевод. Старые записи (до удаления ссылки из переводчика) хранят Markdown:
+# экранированный текст + «[ссылка на билеты здесь](url)»; их приводим к чистому тексту.
+_RU_LINK_TAIL = re.compile(r'\s*\[ссылка на билеты здесь\]\([^)]*\)\s*$')
 _MD_ESCAPED = re.compile(r'\\([_*`\[\]])')
 _MANY_NEWLINES = re.compile(r'\n{3,}')
 
@@ -52,7 +53,9 @@ def plain_description(row: dict) -> str:
     """Описание для показа: русский перевод, если есть, иначе оригинал."""
     ru = (row.get('description_ru') or '').strip()
     if ru:
-        text = _MD_ESCAPED.sub(r'\1', _RU_LINK_TAIL.sub('', ru))
+        if _RU_LINK_TAIL.search(ru):
+            ru = _MD_ESCAPED.sub(r'\1', _RU_LINK_TAIL.sub('', ru))
+        text = ru
     else:
         text = (row.get('description') or '')
     text = text.replace('\r\n', '\n').strip()

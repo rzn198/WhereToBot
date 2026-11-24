@@ -570,7 +570,7 @@ async def ai_translation(rep: Report, items: list, args) -> None:
             client.report_bad_output()
             rep.bad(f"{i.title}: ответ не прошёл проверку ({e})")
             continue
-        final = build_description_ru(out, i.source_url, st.max_chars)
+        final = build_description_ru(out, st.max_chars)
         ru = is_russian(out)
         (rep.ok if ru else rep.warn)(f"{i.title[:40]}: переведено ({len(out)} симв.), на русском: {ru}")
         rep.info(f"    было: {sent[:120]!r}\n    стало: {out[:160]!r}")

@@ -1,10 +1,9 @@
-"""Чистые функции перевода описаний: определение русского текста, проверка ответа, сборка description_ru."""
+"""Чистые функции перевода описаний: определение русского текста, проверка ответа, подготовка description_ru."""
 from __future__ import annotations
 
 from difflib import SequenceMatcher
 import re
 
-TICKETS_LINK_TEXT = "ссылка на билеты здесь"
 ELLIPSIS = "..."
 
 MAX_LEN_RATIO = 3
@@ -26,11 +25,6 @@ _LAT = re.compile(r"[A-Za-zČčĆćŽžŠšĐđ]")
 
 class BadTranslation(Exception):
     """Ответ модели не прошёл проверку."""
-
-
-def escape_md(text: str) -> str:
-    """Идентично боту (bot/handlers/contact.py): экранируем _ * ` [ ] ."""
-    return re.sub(r"([_*`\[\]])", r"\\\1", text)
 
 
 def is_russian(text: str, min_share: float = 0.6) -> bool:
@@ -65,11 +59,10 @@ def cut_input(text: str, limit: int) -> str:
     return (cut[:sp] if sp > 0 else cut).rstrip()
 
 
-def build_description_ru(translated: str, source_url: str, max_chars: int) -> str:
-    """Обрезка -> escape текста -> Markdown-ссылка на билеты (бот потом снимает хвост-ссылку и экранирование)."""
-    truncated = truncate_word_boundary(translated.strip(), max_chars)
-    link = f"[{TICKETS_LINK_TEXT}]({source_url})"
-    return f"{escape_md(truncated)}\n\n{link}"
+def build_description_ru(translated: str, max_chars: int) -> str:
+    """description_ru = чистый перевод, обрезанный по границе слова (с «...»). Без ссылки и без Markdown-экранирования:
+    ссылку на билеты бот строит сам из source_url."""
+    return truncate_word_boundary(translated.strip(), max_chars)
 
 
 MIN_CHECK_LETTERS = 40        # короче — проверки «русский / не копия» не применяем (имена, названия туров)

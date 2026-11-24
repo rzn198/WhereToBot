@@ -17,7 +17,7 @@ from shared.config import _translation_section
 from translator import service as tsvc
 from translator.select import select_candidates
 from translator.service import PassResult, TranslationHook, TranslationSettings, translation_settings
-from translator.text import (BadTranslation, build_description_ru, cut_input, escape_md, is_russian,
+from translator.text import (BadTranslation, build_description_ru, cut_input, is_russian,
                              truncate_word_boundary, validate)
 
 DSN = os.getenv("DEDUP_TEST_DSN")
@@ -37,14 +37,12 @@ def test_is_russian_detects_language_and_serbian_cyrillic():
     assert not is_russian("") and not is_russian("12:00 — 14:00")
 
 
-def test_build_description_ru_truncates_escapes_and_adds_link():
+def test_build_description_ru_is_plain_truncated_translation():
     text = "Слово " * 200
-    out = build_description_ru(text, "https://x.rs/e?a=1", 100)
-    body, link = out.split("\n\n")
-    assert body.endswith("...") and len(body) <= 103
-    assert link == "[ссылка на билеты здесь](https://x.rs/e?a=1)"
-    assert build_description_ru("a_b *c* [d]", "https://u", 600).startswith("a\\_b \\*c\\* \\[d\\]")
-    assert escape_md("`x`") == "\\`x\\`"
+    out = build_description_ru(text, 100)
+    assert out.endswith("...") and len(out) <= 103
+    assert "[" not in out and "](" not in out and "билет" not in out          # ни ссылки, ни Markdown
+    assert build_description_ru("  a_b *c* [d]  ", 600) == "a_b *c* [d]"       # без экранирования и пробелов по краям
     assert truncate_word_boundary("коротко", 50) == "коротко"
 
 
@@ -82,6 +80,15 @@ def test_config_section_reads_env_and_sources(monkeypatch):
 def test_dedup_event_text_ignores_translation():
     row = dict(title="T", venue="V", description="Original text", description_ru="Перевод")
     assert "Перевод" not in dedup_store._event_text(row) and "Original text" in dedup_store._event_text(row)
+
+
+def test_card_description_new_plain_and_legacy_markdown():
+    from bot.formatters.event_card import plain_description
+    assert plain_description({"description_ru": "Перевод a_b *c*", "description": "orig"}) == "Перевод a_b *c*"   # новый: как есть
+    legacy = "Перевод a\\_b \\*c\\*\n\n[ссылка на билеты здесь](https://x.rs/e)"
+    assert plain_description({"description_ru": legacy, "description": "orig"}) == "Перевод a_b *c*"            # старый: чистим
+    assert plain_description({"description_ru": "Текст [d](http://u)", "description": "o"}) == "Текст [d](http://u)"   # чужую ссылку не режем
+    assert plain_description({"description_ru": None, "description": "orig"}) == "orig"
 
 
 # ------------------------------------------------------------------ выбор победителей (Postgres)
@@ -175,7 +182,7 @@ async def test_run_pass_translates_serbian_and_ignores_russian(pool):
     assert (res.status, res.candidates, res.translated, res.failed) == ("ok", 1, 1, 0)       # русское описание — не кандидат
     assert len(calls) == 1 and "Koncert" in calls[0]                               # модель видела только сербский текст
     got = {r["id"]: r["description_ru"] for r in await pool.fetch("SELECT id, description_ru FROM events")}
-    assert got[sr].startswith("Концерт группы X в клубе Y.") and got[sr].endswith("(https://x.rs/1)")
+    assert got[sr] == "Концерт группы X в клубе Y." and "билет" not in got[sr]                   # чистый перевод без ссылки
     assert got[ru] is None                                                          # русское: description_ru не пишем
     again = await tsvc.run_pass(pool, make_client(ok_handler(calls)), ST_ON)       # повтор ничего не делает
     assert again.candidates == 0 and len(calls) == 1
