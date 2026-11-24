@@ -27,7 +27,7 @@ METHODS = ('off', 'shadow', 'on')
 class TranslationSettings:
     method: str = 'off'
     sources: tuple[str, ...] = ()
-    max_chars: int = 600              # длина description_ru до ссылки на билеты
+    max_chars: int = 600              # максимальная длина description_ru
     input_chars: int = 1500           # сколько символов оригинала отправляем модели
     concurrency: int = 3
     only_upcoming: bool = True
@@ -104,7 +104,7 @@ async def run_pass(pool, client, st: TranslationSettings, *, today=None) -> Pass
     stop = asyncio.Event()
 
     async def save(row, translated: str, source_text: str) -> None:
-        desc_ru = build_description_ru(translated, row['source_url'], st.max_chars)
+        desc_ru = build_description_ru(translated, st.max_chars)
         updated = await pool.execute(
             f"UPDATE {Tables.EVENTS} SET description_ru = $1 "
             f"WHERE id = $2 AND description_ru IS NULL AND description IS NOT DISTINCT FROM $3",
