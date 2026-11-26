@@ -63,6 +63,9 @@ CATEGORY_MAP = {**REFINE_MAP, **AGGREGATE_MAP}
 # Категории, полученные из точных подразделов и музейного раздела, надёжны. Остальное — грубая категория
 # широкого раздела («Концерты» у билетов может оказаться спектаклем): basis 'aggregate', проверяет AI.
 _RELIABLE_CATEGORIES = set(REFINE_MAP.values()) | {AGGREGATE_MAP["muzeji_izlozba"]}
+# Подразделы, чья категория всё же ненадёжна: sou_26 («шоу») вмещает мюзикл, кабаре, спорт (Super ENDURO) и т. п. — basis 'aggregate',
+# категорию проверяет AI, хотя значение «Игры и развлечения» у стендапа (standup_42) остаётся точным.
+UNRELIABLE_SLUGS = frozenset({"sou_26"})
 
 # Метка «Музеи». Постоянная экспозиция музея продаётся как «событие на каждый день»: название записи — ровно название
 # музея. Совпадение только по названию ЦЕЛИКОМ (регистр, диакритика и пунктуация не важны; любая добавка — «тур»,
@@ -260,13 +263,13 @@ class TicketsRsScraper(BaseScraper):
         result = []
         # страница 1 уже загружена
         result.extend(self._parse_events(data.get("Events") or [],
-                                         category, now, seen_urls))
+                                         category, now, seen_urls, slug))
         # остальные страницы
         for page in range(2, total_pages + 1):
             await asyncio.sleep(PAGE_DELAY)
             d = await self._post(client, slug, page)
             evs = ((d or {}).get("data") or {}).get("Events") or []
-            result.extend(self._parse_events(evs, category, now, seen_urls))
+            result.extend(self._parse_events(evs, category, now, seen_urls, slug))
 
         logger.debug(f"TICKETSRS_CAT | slug={slug} | pages={total_pages} | "
                      f"events={len(result)}")
@@ -293,16 +296,16 @@ class TicketsRsScraper(BaseScraper):
         # оба варианта пусты — возвращаем последний ответ (для логики пагинации)
         return d
 
-    def _parse_events(self, events, category, now, seen_urls):
+    def _parse_events(self, events, category, now, seen_urls, slug=None):
         result = []
         for ev in events:
-            item = self._build_item(ev, category, now)
+            item = self._build_item(ev, category, now, slug)
             if item and item.source_url not in seen_urls:
                 seen_urls.add(item.source_url)
                 result.append(item)
         return result
 
-    def _build_item(self, ev, category, now) -> EventItem | None:
+    def _build_item(self, ev, category, now, section_slug=None) -> EventItem | None:
         title = (ev.get("Title") or "").strip()
         if not title:
             return None
@@ -347,7 +350,8 @@ class TicketsRsScraper(BaseScraper):
             venue=venue,
             country="RS",
             event_types=[MUSEUMS] if museum else [category],
-            category_basis='fixed' if museum else ('site' if category in _RELIABLE_CATEGORIES else 'aggregate'),
+            category_basis='fixed' if museum else (
+                'site' if category in _RELIABLE_CATEGORIES and section_slug not in UNRELIABLE_SLUGS else 'aggregate'),
             category_hint=None if museum else f"широкий раздел сайта: {category}",
             images=images,
             dedup_key=build_dedup_key(title, starts_at, None),
