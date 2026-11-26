@@ -42,10 +42,22 @@ CATEGORY_MAP = {
 _BROAD_CATEGORIES = {"Концерты", "Кино/Театр"}
 
 
+# Описание короче этого порога — только «Название | дата | клуб | время»: AI нечего оценивать и он придумывает «Игры»
+# для клубных ночей (Karma Party, Doček Nove godine). Такой записи доверяем категории сайта.
+MIN_DESCRIPTION_FOR_AI = 80
+
+
 def _basis(event_types: list[str]) -> str:
     if not event_types:
         return 'none'
     return 'aggregate' if _BROAD_CATEGORIES & set(event_types) else 'site'
+
+
+def _basis_for(event_types: list[str], description: str | None) -> str:
+    """_basis + правило короткого описания: без текста AI не проверяет широкую категорию сайта."""
+    if event_types and len((description or '').strip()) < MIN_DESCRIPTION_FOR_AI:
+        return 'site'
+    return _basis(event_types)
 
 
 SERBIAN_MONTHS = {
@@ -227,7 +239,7 @@ class GigstixScraper(BaseScraper):
             city=city,
             country="RS",
             event_types=event_types,
-            category_basis=_basis(event_types),
+            category_basis=_basis_for(event_types, description),
             category_hint=("категории сайта: " + ", ".join(event_types)) if event_types else None,
             images=images,
             dedup_key=build_dedup_key(title, starts_at, city),
