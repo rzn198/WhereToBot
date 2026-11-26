@@ -1,4 +1,4 @@
-"""Переходы из пуша: «⭐ В запланированное» и ссылка поста (/start fav_<id>) открывают избранное новым сообщением внизу чата."""
+"""Переходы из пуша: «❤️ В запланированное» и ссылка поста (/start fav_<id>) открывают избранное новым сообщением внизу чата."""
 from loguru import logger
 from telegram import Update
 from telegram.error import TelegramError

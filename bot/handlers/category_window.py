@@ -23,7 +23,7 @@ from bot.utils.categories import MAIN_MENU_CODES, get_category, horizon_days, wi
 from bot.utils.links import window_card_url
 from bot.utils.messenger import edit_or_send
 from bot.utils.window import (
-    DAY_BUTTONS_PER_ROW, Item, Layout, format_day_button, format_day_title, item_from_row, layout_window, render_text,
+    Item, Layout, format_day_title, item_from_row, layout_window, render_text,
     window_settings,
 )
 from shared.config import config
@@ -109,13 +109,7 @@ def _pager_row(code: str, first: date, last: date, page: int, pages: int) -> lis
 
 def build_keyboard(code: str, first: date, last: date, layout: Layout) -> InlineKeyboardMarkup:
     rows: list[list[InlineKeyboardButton]] = []
-    if layout.mode == 'aggregate':
-        buttons = [
-            InlineKeyboardButton(format_day_button(d, n), callback_data=f'wl:{code}:{d.isoformat()}:{d.isoformat()}')
-            for d, n in layout.day_counts
-        ]
-        rows += [buttons[i:i + DAY_BUTTONS_PER_ROW] for i in range(0, len(buttons), DAY_BUTTONS_PER_ROW)]
-    elif layout.pages > 1:
+    if layout.pages > 1:
         rows.append(_pager_row(code, first, last, layout.page, layout.pages))
     rows.append(_day_row(code, first, last))
     rows.append([InlineKeyboardButton('⬅️ Назад', callback_data=back_callback(code))])
@@ -162,9 +156,8 @@ async def render_window(update: Update, context: ContextTypes.DEFAULT_TYPE, code
     username = await bot_username(context)
     if layout.mode == 'empty':
         text, parse_mode = f'{head}\n\n{empty_text(first, last, today)}', None
-    elif layout.mode == 'aggregate' or not username:
-        if layout.mode == 'list':
-            logger.warning('WINDOW | у бота нет username: строки без ссылок')
+    elif not username:
+        logger.warning('WINDOW | у бота нет username: строки без ссылок')
         text, parse_mode = render_text(layout)
     else:
         text, parse_mode = render_text(layout, lambda it: window_card_url(username, code, first, last, it.ref))

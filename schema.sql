@@ -163,6 +163,20 @@ CREATE INDEX IF NOT EXISTS idx_cinema_events_title_normalized_showtime
 CREATE INDEX IF NOT EXISTS idx_cinema_events_showtime_belgrade_date
     ON cinema_events (DATE(showtime AT TIME ZONE 'Europe/Belgrade'));
 
+-- Избранное киноафиши (миграция 024): конкретный сеанс.
+CREATE TABLE IF NOT EXISTS cinema_favorites (
+    id          BIGSERIAL    PRIMARY KEY,                       -- короткий идентификатор для callback_data
+    user_id     BIGINT       NOT NULL,
+    movie_id    BIGINT       NOT NULL REFERENCES cinema_movies (id) ON DELETE CASCADE,
+    cinema_name TEXT         NOT NULL,
+    showtime    TIMESTAMPTZ  NOT NULL,
+    added_at    TIMESTAMPTZ  NOT NULL DEFAULT now(),
+    CONSTRAINT uq_cinema_favorites UNIQUE (user_id, movie_id, cinema_name, showtime)
+);
+
+CREATE INDEX IF NOT EXISTS idx_cinema_favorites_user_showtime ON cinema_favorites (user_id, showtime);
+CREATE INDEX IF NOT EXISTS idx_cinema_favorites_showtime ON cinema_favorites (showtime);
+
 CREATE TABLE IF NOT EXISTS cinema_descriptions (
     cinema_name TEXT PRIMARY KEY,
     description TEXT NOT NULL DEFAULT ''

@@ -122,16 +122,16 @@ def test_post_line_has_no_venue_even_if_present():
 
 
 def test_settings_from_config_with_garbage_and_clamps(monkeypatch):
-    monkeypatch.setitem(config, 'ui', {'window': {'page_size': 'abc', 'title_max': 30, 'venue_max': 9999, 'period_list_max': 1}})
+    monkeypatch.setitem(config, 'ui', {'window': {'page_size': 'abc', 'title_max': 30, 'venue_max': 9999}})
     st = w.window_settings()
-    assert st.page_size == 15 and st.title_max == 30 and st.venue_max == 40 and st.period_list_max == 10
+    assert st.page_size == 15 and st.title_max == 30 and st.venue_max == 40
 
 
 def test_worst_case_page_always_fits_telegram_limit():
     """Верхние границы настроек: самая длинная страница (20 строк по 80+40 символов, заголовки дней) < 4096."""
     st = w.WindowSettings(page_size=20, title_max=80, venue_max=40)
     items = [ev(i, 'ж' * 200, TODAY + timedelta(days=i), 'м' * 100, time(20, 0)) for i in range(20)]
-    lay = w.layout_window(items, 'H' * 50, TODAY, TODAY + timedelta(days=30), TODAY, w.WindowSettings(**{**st.__dict__, 'period_list_max': 200}))
+    lay = w.layout_window(items, 'H' * 50, TODAY, TODAY + timedelta(days=30), TODAY, st)
     html, _ = w.render_text(lay, lambda it: 'https://t.me/bot?start=cw_concerts_20261118_20261218_e1234567')
     plain, _ = w.render_text(lay)
     assert lay.mode == 'list' and len(plain) < 4096
@@ -177,12 +177,13 @@ def test_period_page_two_starts_with_its_day_header():
     assert lay.rows[0].kind == 'day' and lay.rows[1].number == 16
 
 
-def test_big_period_becomes_aggregate_by_days():
+def test_big_period_is_still_a_paged_list_with_day_headings():
     items = [ev(i, f'E{i}', TODAY + timedelta(days=i // 30)) for i in range(90)]
     lay = w.layout_window(items, 'H', TODAY, TODAY + timedelta(days=2), TODAY, ST)
-    assert lay.mode == 'aggregate' and lay.shown == [] and [c for _, c in lay.day_counts] == [30, 30, 30]
-    text, mode = w.render_text(lay)
-    assert '30 событий' in text and '• ' not in text and mode is None
+    assert lay.mode == 'list' and len(lay.shown) == ST.page_size and lay.pages == -(-90 // ST.page_size)
+    assert lay.rows[0].kind == 'day'
+    text, _ = w.render_text(lay)
+    assert 'Период большой' not in text and text.count('• ') == ST.page_size
 
 
 def test_period_with_single_active_day_is_a_normal_day_list():
@@ -271,12 +272,13 @@ def test_navigation_rows_and_back_target():
     assert rows(cw.build_keyboard('concerts', TODAY, TODAY, lay))[-1] == ['nav:menu']
 
 
-def test_aggregate_has_day_buttons_three_per_row():
+def test_big_period_keyboard_has_pager_and_no_day_buttons():
     items = [ev(i, f'E{i}', TODAY + timedelta(days=i // 30)) for i in range(150)]
     last = TODAY + timedelta(days=4)
     kb = cw.build_keyboard('concerts', TODAY, last, w.layout_window(items, 'H', TODAY, last, TODAY, ST))
-    assert rows(kb)[0] == ['wl:concerts:2026-11-18:2026-11-18', 'wl:concerts:2026-11-19:2026-11-19', 'wl:concerts:2026-11-20:2026-11-20']
-    assert kb.inline_keyboard[0][0].text == 'Ср 18.11 · 30'
+    first = rows(kb)[0]
+    assert first[0].startswith('wl:concerts:') and first[1] == 'catnoop' and first[2].startswith('wl:concerts:')
+    assert not any(c.count(':') == 3 and c.endswith(':' + c.split(':')[2]) for r in rows(kb)[1:] for c in r)
 
 
 def test_active_day_button_is_inactive_so_repress_does_not_duplicate_message():

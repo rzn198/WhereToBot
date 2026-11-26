@@ -26,7 +26,8 @@ from bot.keyboards.carousel import carousel_row
 from bot.utils import cinema_text as ct
 from bot.utils.links import cinema_card_url
 from bot.utils.messenger import edit_or_send
-from bot.utils.window import format_day_title, window_settings
+from bot.utils.window import format_day_title, truncate, window_settings
+from db import cinema_favorites
 from db.tables import Tables
 from shared.tz import BELGRADE_TZ, belgrade_today
 
@@ -373,31 +374,22 @@ async def handle_cinema_sessions(update: Update, context: ContextTypes.DEFAULT_T
     await _show_sessions(update, context, *args)
 
 
-@guarded
-async def handle_cinema_pick(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """cmp:<фильм>:<день>:<№ сеанса>:<ЧЧММ> — номер и время сверяются с БД: если афиша успела обновиться, показываем сеансы заново."""
-    query = update.callback_query
-    parts = query.data.split(':')[1:]
-    args = parse_movie_args(parts)
-    if args is None or len(parts) < 4 or not parts[2].isdigit():
-        await query.answer('Неверный запрос', show_alert=True)
-        return
-    await query.answer()
-    movie_id, day = args
+async def _show_pick(update: Update, context: ContextTypes.DEFAULT_TYPE, movie: dict, day: date, sessions: list[dict], index: int) -> None:
+    """Экран одного сеанса: «Локация», «Билеты», «Напомнить / Удалить»."""
     pool = context.bot_data.get('pool')
-    movie = await load_movie(pool, movie_id)
-    sessions = await load_sessions(pool, movie_id, day)
-    index = int(parts[2])
-    if movie is None or index >= len(sessions) or f"{sessions[index]['showtime'].astimezone(BELGRADE_TZ):%H%M}" != parts[3]:
-        await _show_sessions(update, context, movie_id, day)
-        return
     s = sessions[index]
+    movie_id = movie['id']
+    iso = day.isoformat()
+    hhmm = f"{s['showtime'].astimezone(BELGRADE_TZ):%H%M}"
     buttons = []
     if (s['cinema_maps_url'] or '').startswith('http'):
         buttons.append(InlineKeyboardButton('📍 Локация', url=s['cinema_maps_url']))
     if (s['ticket_url'] or '').startswith('http'):
         buttons.append(InlineKeyboardButton('🎟 Билеты', url=s['ticket_url']))
-    rows = ([buttons] if buttons else []) + [[InlineKeyboardButton('⬅️ Назад', callback_data=f'cms:{movie_id}:{day.isoformat()}')]]
+    is_fav = await cinema_favorites.exists(pool, update.effective_user.id, movie_id, s['cinema_name'], s['showtime'])
+    fav = InlineKeyboardButton('💔 Удалить' if is_fav else '❤️ Напомнить',
+                               callback_data=f"{'cfr' if is_fav else 'cfa'}:{movie_id}:{iso}:{index}:{hhmm}")
+    rows = ([buttons] if buttons else []) + [[fav], [InlineKeyboardButton('⬅️ Назад', callback_data=f'cms:{movie_id}:{iso}')]]
     row = await pool.fetchrow(f'SELECT description FROM {Tables.CINEMA_DESCRIPTIONS} WHERE cinema_name = $1', s['cinema_name'])
     about = ((row['description'] if row else '') or '').strip()
     text = (f"🎬 <b>{escape(ct.display_title(movie))}</b>\n\n🏛 {escape(s['cinema_name'])}\n"
@@ -406,3 +398,137 @@ async def handle_cinema_pick(update: Update, context: ContextTypes.DEFAULT_TYPE)
         text += f'\n\n{escape(about)}'
     await edit_or_send(context=context, chat_id=update.effective_chat.id, text=text, parse_mode='HTML',
                        photo=await load_poster(pool, movie_id), keyboard=InlineKeyboardMarkup(rows))
+
+
+async def _pick_target(update: Update, context: ContextTypes.DEFAULT_TYPE, parts: list[str]):
+    """cmp/cfa/cfr: [<фильм>, <день>, <№>, <ЧЧММ>] → (фильм, день, сеансы, №) либо None. Номер и время сверяются с БД:
+    если афиша успела обновиться, показываем сеансы заново."""
+    args = parse_movie_args(parts)
+    if args is None or len(parts) < 4 or not parts[2].isdigit():
+        await update.callback_query.answer('Неверный запрос', show_alert=True)
+        return None
+    movie_id, day = args
+    pool = context.bot_data.get('pool')
+    movie = await load_movie(pool, movie_id)
+    sessions = await load_sessions(pool, movie_id, day)
+    index = int(parts[2])
+    if movie is None or index >= len(sessions) or f"{sessions[index]['showtime'].astimezone(BELGRADE_TZ):%H%M}" != parts[3]:
+        await update.callback_query.answer()
+        await _show_sessions(update, context, movie_id, day)
+        return None
+    return movie, day, sessions, index
+
+
+@guarded
+async def handle_cinema_pick(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """cmp:<фильм>:<день>:<№ сеанса>:<ЧЧММ>"""
+    target = await _pick_target(update, context, update.callback_query.data.split(':')[1:])
+    if target is None:
+        return
+    await update.callback_query.answer()
+    await _show_pick(update, context, *target)
+
+
+@guarded
+async def handle_cinema_fav_toggle(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """cfa|cfr:<фильм>:<день>:<№ сеанса>:<ЧЧММ> — «Напомнить» / «Удалить» на экране сеанса."""
+    query = update.callback_query
+    action, *parts = query.data.split(':')
+    target = await _pick_target(update, context, parts)
+    if target is None:
+        return
+    movie, day, sessions, index = target
+    s = sessions[index]
+    pool = context.bot_data.get('pool')
+    user_id = update.effective_user.id
+    if action == 'cfa':
+        await cinema_favorites.add(pool, user_id, movie['id'], s['cinema_name'], s['showtime'])
+        await query.answer('❤️ Добавлено в запланированное')
+    else:
+        await cinema_favorites.remove(pool, user_id, movie['id'], s['cinema_name'], s['showtime'])
+        await query.answer('Убрано из запланированного')
+    logger.info(f"CINEMA_FAV | {action} | user_id={user_id} | movie={movie['id']} | {s['cinema_name']} | {s['showtime']}")
+    await _show_pick(update, context, movie, day, sessions, index)
+
+
+# ---------------------------------------------------------------- «Кино» в запланированном
+def _fav_title(fav: dict) -> str:
+    return ct.display_title(fav)
+
+
+def _fav_when(fav: dict, today: date) -> str:
+    local = fav['showtime'].astimezone(BELGRADE_TZ)
+    return f"{format_day_title(local.date(), today)}, {local:%H:%M}"
+
+
+def favorites_list_content(favs: list[dict], today: date) -> tuple[str, InlineKeyboardMarkup]:
+    rows = []
+    lines = ['🎬 Кино в запланированном', '']
+    for f in favs:
+        lines.append(f"{'🎬' if f['alive'] else '❌'} {_fav_title(f)} · {_fav_when(f, today)} · {f['cinema_name']}" + ('' if f['alive'] else ' · сеанс снят'))
+        label = f"{'🎬' if f['alive'] else '❌'} {truncate(_fav_title(f), 24)} · {f['showtime'].astimezone(BELGRADE_TZ):%d.%m %H:%M}"
+        rows.append([InlineKeyboardButton(label, callback_data=f"cfo:{f['id']}")])
+    if not favs:
+        lines.append('Пока ничего нет 🤷\nСеанс можно добавить кнопкой «❤️ Напомнить» на его экране в афише кинотеатров.')
+    rows.append([InlineKeyboardButton('⬅️ Назад', callback_data='filter:favorites'), InlineKeyboardButton('🏠 В меню', callback_data='nav:menu')])
+    return '\n'.join(lines), InlineKeyboardMarkup(rows)
+
+
+async def show_favorites_list(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    favs = await cinema_favorites.list_upcoming(context.bot_data.get('pool'), update.effective_user.id)
+    text, keyboard = favorites_list_content(favs, belgrade_today())
+    await edit_or_send(context=context, chat_id=update.effective_chat.id, text=text, keyboard=keyboard, parse_mode=None)
+
+
+@guarded
+async def handle_cinema_fav_list(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """cfl"""
+    await update.callback_query.answer()
+    await show_favorites_list(update, context)
+
+
+def _fav_id(data: str) -> int | None:
+    parts = data.split(':')
+    return int(parts[1]) if len(parts) == 2 and parts[1].isdigit() else None
+
+
+@guarded
+async def handle_cinema_fav_open(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """cfo:<id избранного> — сеанс из списка: время, кинотеатр, «Локация», «Билеты», «Удалить»."""
+    query = update.callback_query
+    fav_id = _fav_id(query.data)
+    if fav_id is None:
+        await query.answer('Неверный запрос', show_alert=True)
+        return
+    await query.answer()
+    pool = context.bot_data.get('pool')
+    fav = await cinema_favorites.get(pool, update.effective_user.id, fav_id)
+    if fav is None:
+        await show_favorites_list(update, context)
+        return
+    today = belgrade_today()
+    text = f"🎬 <b>{escape(_fav_title(fav))}</b>\n\n🏛 {escape(fav['cinema_name'])}\n🕐 {escape(_fav_when(fav, today))}"
+    if not fav['alive']:
+        text += '\n\n❌ Сеанс снят из афиши — в напоминании он не придёт.'
+    links = []
+    if fav['alive'] and (fav['maps_url'] or '').startswith('http'):
+        links.append(InlineKeyboardButton('📍 Локация', url=fav['maps_url']))
+    if fav['alive'] and (fav['ticket_url'] or '').startswith('http'):
+        links.append(InlineKeyboardButton('🎟 Билеты', url=fav['ticket_url']))
+    rows = ([links] if links else []) + [[InlineKeyboardButton('💔 Удалить', callback_data=f'cfd:{fav_id}')],
+                                          [InlineKeyboardButton('⬅️ Назад', callback_data='cfl')]]
+    await edit_or_send(context=context, chat_id=update.effective_chat.id, text=text, parse_mode='HTML',
+                       photo=await load_poster(pool, fav['movie_id']) if fav['alive'] else None, keyboard=InlineKeyboardMarkup(rows))
+
+
+@guarded
+async def handle_cinema_fav_delete(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """cfd:<id избранного>"""
+    query = update.callback_query
+    fav_id = _fav_id(query.data)
+    if fav_id is None:
+        await query.answer('Неверный запрос', show_alert=True)
+        return
+    await query.answer('Убрано из запланированного')
+    await cinema_favorites.remove_by_id(context.bot_data.get('pool'), update.effective_user.id, fav_id)
+    await show_favorites_list(update, context)

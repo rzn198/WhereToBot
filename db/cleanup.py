@@ -127,6 +127,12 @@ async def run_cleanup(pool: asyncpg.Pool) -> dict:
     except Exception as e:
         push_purged = 0
         logger.warning(f"PUSH_LOG_PURGE_FAILED | {type(e).__name__}: {e}")
+    try:
+        from db import cinema_favorites
+        cinema_favs_purged = await cinema_favorites.purge_past(pool)
+    except Exception as e:
+        cinema_favs_purged = 0
+        logger.warning(f"CINEMA_FAV_PURGE_FAILED | {type(e).__name__}: {e}")
     history = await purge_dedup_history(pool, int((config.get('deduplication') or {}).get('history_days', 60)))
 
     no_date_count = sum(1 for r in rows if r['no_date'])
@@ -136,7 +142,7 @@ async def run_cleanup(pool: asyncpg.Pool) -> dict:
     logger.info(
         f"CLEANUP | dated={dated_count} | no_date={no_date_count} | "
         f"held_by_dup_refs={held_count} | alerts_detached={alerts_detached} | "
-        f"events={events_deleted} | ai_seen={seen_purged} | event_ai_categories={event_cats} | card_lines={card_lines_purged} | dedup_history={history} | push_log={push_purged}"
+        f"events={events_deleted} | ai_seen={seen_purged} | event_ai_categories={event_cats} | card_lines={card_lines_purged} | dedup_history={history} | push_log={push_purged} | cinema_favorites={cinema_favs_purged}"
     )
 
     return {

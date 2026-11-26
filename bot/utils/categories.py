@@ -47,7 +47,7 @@ CATEGORIES: tuple[Category, ...] = (
 _BY_CODE = {c.code: c for c in CATEGORIES}
 
 # Категории, вынесенные кнопками в главное меню (порядок = порядок кнопок). Остальные открываются через «Остальные события».
-MAIN_MENU_CODES: tuple[str, ...] = ('concerts', 'fun')
+MAIN_MENU_CODES: tuple[str, ...] = ('concerts', 'fun', 'learn')
 
 
 def get_category(code: str) -> Category | None:

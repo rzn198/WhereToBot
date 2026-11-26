@@ -23,7 +23,6 @@ from shared.config import config
 SEP = ' · '
 BULLET = '•'                       # маркер строки списка (номера нет: ссылка ведёт на карточку, а не на номер)
 ELLIPSIS = '…'
-DAY_BUTTONS_PER_ROW = 3             # кнопки дней в сводке периода
 
 WEEKDAYS = ['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс']
 MONTHS_GEN = ['', 'января', 'февраля', 'марта', 'апреля', 'мая', 'июня',
@@ -42,7 +41,6 @@ class WindowSettings:
     title_max: int = 40
     venue_max: int = 22
     show_venue: bool = False     # место в строке (после времени); по умолчанию не показываем
-    period_list_max: int = 45    # период с большим числом событий показывается сводкой по дням, а не списком
 
 
 def _int(value, default: int, low: int, high: int) -> int:
@@ -71,7 +69,6 @@ def window_settings() -> WindowSettings:
         title_max=_int(raw.get('title_max'), d.title_max, 10, 80),
         venue_max=_int(raw.get('venue_max'), d.venue_max, 5, 40),
         show_venue=_bool(raw.get('show_venue'), d.show_venue),
-        period_list_max=_int(raw.get('period_list_max'), d.period_list_max, 10, 200),
     )
 
 
@@ -202,10 +199,6 @@ def format_day_title(day: date, today: date) -> str:
     return s if day.year == today.year else f'{s} {day.year}'
 
 
-def format_day_button(day: date, count: int) -> str:
-    return f'{WEEKDAYS[day.weekday()]} {day.day:02d}.{day.month:02d} · {count}'
-
-
 def plural_events(n: int) -> str:
     if n % 10 == 1 and n % 100 != 11:
         word = 'событие'
@@ -226,7 +219,7 @@ class Row:
 
 @dataclass
 class Layout:
-    """Результат раскладки. mode: empty | list | aggregate."""
+    """Результат раскладки. mode: empty | list (период любой длины тоже списком: страницы по page_size, внутри заголовки дней)."""
     mode: str
     head: str                       # заголовок вместе с числом событий и страницей
     rows: list[Row] = field(default_factory=list)
@@ -264,11 +257,6 @@ def layout_window(items: list[Item], head: str, first: date, last: date, today: 
         opts = display_settings()
     days = group_by_day(items)
     counts = [(d, len(g)) for d, g in days]
-
-    if first != last and len(days) > 1 and total > st.period_list_max:
-        rows = [Row('text', 'Период большой для списка, выберите день:'), Row('text', '')]
-        rows += [Row('day', f'{format_day_title(d, today)} · {plural_events(c)}') for d, c in counts]
-        return Layout('aggregate', f'{head} · {plural_events(total)}', rows, 1, 1, counts, total)
 
     pages = page_count(total, st)
     if not 1 <= page <= pages:
