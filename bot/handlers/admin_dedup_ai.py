@@ -10,6 +10,7 @@ from __future__ import annotations
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import ContextTypes
 
+from bot.keyboards.carousel import carousel_row
 from bot.handlers.contact import _edit_contact_window, _require_admin, escape_md
 from db import dedup_admin as da
 
@@ -82,11 +83,9 @@ async def _show(update: Update, context: ContextTypes.DEFAULT_TYPE, notice: str 
         if await da.can_swap(pool, d, w, l):
             row.append(InlineKeyboardButton('🔁 Поменять местами', callback_data=f"dd:sw:{d['id']}"))
         rows.append(row)
-    rows.append([
-        InlineKeyboardButton('◀️', callback_data='dd:nav:prev'),
-        InlineKeyboardButton(f'{idx + 1}/{len(ids)}', callback_data='dd:nav:counter'),
-        InlineKeyboardButton('Пропустить ▶️' if status == 'active' else '▶️', callback_data='dd:nav:next'),
-    ])
+    arrows = carousel_row(idx, len(ids), 'dd:nav:prev', 'dd:nav:next', 'Пропустить ' if status == 'active' else '')
+    if arrows:
+        rows.append(arrows)
     rows.append(back)
     await _edit_contact_window(context=context, chat_id=chat_id, menu_message_id=menu_message_id,
                                text=text, keyboard=InlineKeyboardMarkup(rows))

@@ -190,3 +190,21 @@ async def test_admin_hidden_events_and_dedup_report_wrap():
          patch.object(admin_dedup_ai, '_show', AsyncMock()):
         await admin_dedup_ai.handle_dd_nav(upd, ctx)
     assert ctx.user_data['dd_idx'] == 0 and q.answer.await_args.args == ('🔁 К началу списка',)
+
+
+def test_carousel_row_shows_target_numbers_and_wraps():
+    from bot.keyboards.carousel import carousel_row
+    row = lambda *a, **k: [(b.text, b.callback_data) for b in carousel_row(*a, **k)]
+    assert row(8, 22, 'p', 'n') == [('◀️ 8/22', 'p'), ('10/22 ▶️', 'n')]
+    assert row(0, 22, 'p', 'n') == [('◀️ 22/22', 'p'), ('2/22 ▶️', 'n')]
+    assert row(21, 22, 'p', 'n') == [('◀️ 21/22', 'p'), ('1/22 ▶️', 'n')]
+    assert row(0, 2, 'p', 'n', 'Пропустить ') == [('◀️ 2/2', 'p'), ('Пропустить 2/2 ▶️', 'n')]
+    assert row(0, 1, 'p', 'n') == [] and row(0, 0, 'p', 'n') == []
+
+
+def test_admin_carousels_use_the_same_arrows_and_no_old_emoji():
+    import inspect
+    from bot.handlers import admin_dedup_ai, admin_panel
+    for mod in (admin_panel, admin_dedup_ai):
+        src = inspect.getsource(mod)
+        assert 'carousel_row' in src and '🔙' not in src and '🔜' not in src and ':counter' not in src

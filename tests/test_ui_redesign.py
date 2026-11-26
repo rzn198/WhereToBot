@@ -102,7 +102,7 @@ def test_card_under_review_button_is_labelled_and_inert():
 
 def test_card_category_and_menu_buttons():
     last = rows(get_event_nav_keyboard(0, 1, 5, False, category_code='concerts'))[-1]
-    assert last == [('🗂 К категории', 'cat:concerts'), ('🏠 В меню', 'nav:menu')]
+    assert last == [('⬅️ Назад', 'cat:concerts'), ('🏠 В меню', 'nav:menu')]       # лента всей категории: назад в категорию
     assert rows(get_event_nav_keyboard(0, 1, 5, False))[-1] == [('🏠 В меню', 'nav:menu')]
 
 

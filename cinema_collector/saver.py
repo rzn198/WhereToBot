@@ -5,6 +5,7 @@ from loguru import logger
 from telegram import Bot
 
 from db.tables import Tables
+from cinema_collector.movie_keys import canonical_key
 from cinema_collector.scrapers.base import CinemaEvent
 
 
@@ -80,11 +81,88 @@ INSERT_SQL = f"""
         movie_title_normalized,
         movie_genre, movie_description_short, movie_description_full,
         movie_poster_url, movie_poster_file_id, movie_poster_msg_id,
-        showtime, ticket_url, source
+        showtime, ticket_url, source, movie_key
     ) VALUES (
-        $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16
+        $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17
     )
 """
+
+_ALIASES_SQL = f"""
+    SELECT alias_key, movie_id FROM {Tables.CINEMA_MOVIE_ALIASES} WHERE alias_key = ANY($1::text[])
+"""
+
+_NEW_MOVIE_SQL = f"""
+    INSERT INTO {Tables.CINEMA_MOVIES} (title_key, title_serbian, title_original)
+    VALUES ($1, $2, $3)
+    ON CONFLICT (title_key) DO UPDATE SET last_seen_at = now()
+    RETURNING id
+"""
+
+_NEW_ALIAS_SQL = f"""
+    INSERT INTO {Tables.CINEMA_MOVIE_ALIASES} (alias_key, movie_id) VALUES ($1, $2)
+    ON CONFLICT (alias_key) DO NOTHING
+"""
+
+# Описание «только растёт»: берём самое длинное из всех кинотеатров, чтобы выбор не прыгал
+# между прогонами (иначе AI переводил бы один и тот же фильм заново).
+_TOUCH_MOVIE_SQL = f"""
+    UPDATE {Tables.CINEMA_MOVIES} SET
+        last_seen_at        = now(),
+        title_serbian       = COALESCE(title_serbian, $2),
+        title_original      = COALESCE(title_original, $3),
+        description_src     = CASE WHEN length($4::text) > description_src_len THEN $4::text ELSE description_src END,
+        description_src_len = GREATEST(description_src_len, length($4::text)),
+        updated_at          = CASE WHEN length($4::text) > description_src_len THEN now() ELSE updated_at END
+    WHERE id = $1
+"""
+
+
+def movie_key_of(event: CinemaEvent) -> str:
+    """Канонический ключ фильма для сеанса (пусто, если из названия ключ не построить)."""
+    return (canonical_key(normalize_title(event.movie_title_serbian or event.movie_title))
+            or canonical_key(normalize_title(event.movie_title)))
+
+
+def _best_description(event: CinemaEvent) -> str:
+    return max((event.movie_description_full or '', event.movie_description_short or ''), key=len).strip()
+
+
+async def _resolve_movies(conn, events: list[CinemaEvent], keys: list[str]) -> dict[str, int]:
+    """key -> cinema_movies.id: сначала по алиасам (там же результат склейки AI), нового фильма создаём.
+
+    Одновременно обновляет last_seen_at, недостающие названия и самое длинное описание.
+    Вызывается внутри транзакции saver'а, обёрнутой в savepoint: сбой слоя фильмов не должен ломать афишу.
+    """
+    uniq = sorted({k for k in keys if k})
+    if not uniq:
+        return {}
+    ids = {r['alias_key']: r['movie_id'] for r in await conn.fetch(_ALIASES_SQL, uniq)}
+
+    first: dict[str, CinemaEvent] = {}
+    best_desc: dict[str, str] = {}
+    for ev, key in zip(events, keys):
+        if not key:
+            continue
+        first.setdefault(key, ev)
+        d = _best_description(ev)
+        if len(d) > len(best_desc.get(key, '')):
+            best_desc[key] = d
+
+    for key in uniq:
+        if key in ids:
+            continue
+        ev = first[key]
+        movie_id = await conn.fetchval(_NEW_MOVIE_SQL, key, ev.movie_title_serbian or None, ev.movie_title or None)
+        await conn.execute(_NEW_ALIAS_SQL, key, movie_id)
+        # алиас мог уже существовать (параллельный saver): берём то, что записано
+        ids[key] = await conn.fetchval(
+            f"SELECT movie_id FROM {Tables.CINEMA_MOVIE_ALIASES} WHERE alias_key = $1", key)
+
+    await conn.executemany(_TOUCH_MOVIE_SQL, [
+        (ids[key], first[key].movie_title_serbian or None, first[key].movie_title or None, best_desc.get(key, ''))
+        for key in uniq
+    ])
+    return ids
 
 
 async def _poster_for(bot, event, poster_cache):
@@ -143,17 +221,26 @@ async def save_events(
             event.source,
         ))
 
+    keys = [movie_key_of(e) for e in events]
     try:
         async with pool.acquire() as conn:
             async with conn.transaction():
                 deleted = await conn.execute(
                     f"DELETE FROM {Tables.CINEMA_EVENTS} WHERE source = $1", source)
-                await conn.executemany(INSERT_SQL, rows)
+                movie_ids: dict[str, int] = {}
+                try:
+                    async with conn.transaction():      # savepoint: сбой фильмов не откатывает сеансы
+                        movie_ids = await _resolve_movies(conn, events, keys)
+                except Exception as e:
+                    logger.error(f"CINEMA_MOVIES_ERROR | source={source} | {type(e).__name__}: {e} | "
+                                 f"сеансы сохраняются без movie_key")
+                await conn.executemany(
+                    INSERT_SQL, [row + (movie_ids.get(key),) for row, key in zip(rows, keys)])
     except Exception as e:
         logger.error(f"CINEMA_SAVE_ERROR | source={source} | rows={len(rows)} | {type(e).__name__}: {e} | "
                      f"откат, прежние данные сохранены")
         return 0
 
     logger.info(f"CINEMA_CLEANUP | source={source} | deleted={deleted}")
-    logger.info(f"CINEMA_SAVED | source={source} | saved={len(rows)}")
+    logger.info(f"CINEMA_SAVED | source={source} | saved={len(rows)} | movies={len(set(movie_ids.values()))}")
     return len(rows)

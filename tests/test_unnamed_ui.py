@@ -19,12 +19,12 @@ def test_card_expand_and_date_on_one_row_arrows_separate():
     kb = get_event_nav_keyboard(0, 5, 'e1', False, is_preview=True, event_date=date(2026, 11, 14))
     t = _texts(kb)
     assert t[0] == ['📋 Все описание', '📅 Сб 14.11']
-    assert t[1] == ['🔙', '1 / 5', '🔜']
+    assert t[1] == ['◀️ 5/5', '2/5 ▶️']
 
 
-def test_card_short_text_only_date_and_counter_always():
+def test_card_short_text_only_date_and_arrows_with_target_numbers():
     t = _texts(get_event_nav_keyboard(2, 9, 'e1', False, event_date=date(2026, 11, 14)))
-    assert t[0] == ['📅 Сб 14.11'] and t[1] == ['🔙', '3 / 9', '🔜']
+    assert t[0] == ['📅 Сб 14.11'] and t[1] == ['◀️ 2/9', '4/9 ▶️']
 
 
 def test_admin_review_button_states():
@@ -79,3 +79,31 @@ async def test_bad_date_text_keeps_input_state():
     with patch.object(un, 'is_admin_user', return_value=True):
         assert await un.handle_unnamed_text(upd, ctx) is True
     assert 'un_input' in ctx.user_data
+
+
+def test_card_arrows_are_a_carousel_with_target_numbers():
+    def arrows(i, n):
+        r = _texts(get_event_nav_keyboard(i, n, 'e1', False))[0]
+        return r
+    assert arrows(8, 22) == ['◀️ 8/22', '10/22 ▶️']
+    assert arrows(0, 22) == ['◀️ 22/22', '2/22 ▶️']          # с первой карточки назад — на последнюю
+    assert arrows(21, 22) == ['◀️ 21/22', '1/22 ▶️']         # с последней вперёд — на первую
+    assert arrows(0, 2) == ['◀️ 2/2', '2/2 ▶️']
+    kb = get_event_nav_keyboard(3, 10, 'e1', False)
+    assert [b.callback_data for b in kb.inline_keyboard[0]] == ['nav:prev', 'nav:next']
+    assert not any('nav:counter' in b.callback_data for r in kb.inline_keyboard for b in r)
+
+
+def test_card_single_event_has_no_arrows():
+    t = _texts(get_event_nav_keyboard(0, 1, 'e1', False))
+    assert not any('▶️' in x or '◀️' in x for r in t for x in r)
+
+
+def test_card_back_button_depends_on_origin():
+    def last(**kw):
+        return [(b.text, b.callback_data) for b in get_event_nav_keyboard(0, 3, 'e1', False, **kw).inline_keyboard[-1]]
+    assert last() == [('🏠 В меню', 'nav:menu')]                                          # избранное, пуш, поиск
+    assert last(category_code='fun') == [('⬅️ Назад', 'cat:fun'), ('🏠 В меню', 'nav:menu')]
+    assert last(category_code='fun', calendar_back='catback:fun:2026-12-05:2026-12-05')[0] == ('⬅️ Назад', 'catback:fun:2026-12-05:2026-12-05')
+    both = last(category_code='fun', calendar_back='catback:fun:a:b', list_back='wl:fun:a:b:2')
+    assert both[0] == ('⬅️ Назад', 'wl:fun:a:b:2')                                       # из окна — на страницу списка
