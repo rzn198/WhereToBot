@@ -566,6 +566,10 @@ def test_card_back_to_list_goes_to_the_page_of_the_card():
 def test_card_has_back_to_list_only_when_opened_from_window():
     assert not any(c.startswith('wl:') for c in cbs(card_kb(None)))
     assert not any(c.startswith('wl:') for c in cbs(card_kb('cat:concerts:date:2026-11-19')))
+    # без окна «Назад» ведёт в календарь (лента за день), с окном — только на страницу списка, лишних кнопок возврата нет
+    assert 'catback:concerts:2026-11-18:2026-11-18' in cbs(card_kb(None))
+    win = cbs(card_kb('cat:concerts:date:2026-11-18', index=15))
+    assert 'catback:concerts:2026-11-18:2026-11-18' not in win and 'cat:concerts' not in win
 
 
 def test_card_list_button_for_period():

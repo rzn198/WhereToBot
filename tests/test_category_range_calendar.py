@@ -255,11 +255,11 @@ def test_calendar_back_data_by_filter():
     assert _calendar_back_data('favorites') is None and _calendar_back_data('') is None
 
 
-def test_card_keyboard_with_calendar_back_has_calendar_category_and_menu():
+def test_card_keyboard_from_day_or_period_feed_goes_back_to_calendar():
     rows = [[(b.text, b.callback_data) for b in r] for r in
             get_event_nav_keyboard(0, 3, 5, False, category_code='fun', calendar_back='catback:fun:2026-12-05:2026-12-09').inline_keyboard]
-    assert rows[-2] == [('📅 К календарю', 'catback:fun:2026-12-05:2026-12-09'), ('🗂 К категории', 'cat:fun')]
-    assert rows[-1] == [('🏠 В меню', 'nav:menu')]
+    assert rows[-1] == [('⬅️ Назад', 'catback:fun:2026-12-05:2026-12-09'), ('🏠 В меню', 'nav:menu')]
+    assert not any('К календарю' in t or 'К категории' in t for r in rows for t, _ in r)
 
 
 async def test_noop_buttons_answer_with_hint_on_arrows():

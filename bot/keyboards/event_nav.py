@@ -2,6 +2,8 @@ from datetime import date, datetime
 
 from telegram import InlineKeyboardMarkup, InlineKeyboardButton
 
+from bot.keyboards.carousel import carousel_row
+
 
 _WEEKDAYS = ('Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс')
 
@@ -33,10 +35,15 @@ def get_event_nav_keyboard(
 ) -> InlineKeyboardMarkup:
     """Кнопки карточки.
 
-    category_code — код категории, из ленты которой открыта карточка: появляется кнопка «К категории».
-    calendar_back — callback_data кнопки «К календарю» (лента за день или период из календаря категории).
+    category_code — код категории, из ленты которой открыта карточка.
+    calendar_back — callback_data возврата в календарь (лента за день или период из календаря категории).
     event_date    — дата события: над стрелками показывается некликабельная кнопка с датой.
-    list_back     — callback_data кнопки «К списку» (карточка открыта из окна категории).
+    list_back     — callback_data возврата на страницу списка (карточка открыта из окна категории).
+
+    Возврат одной кнопкой «⬅️ Назад» (рядом с «🏠 В меню»), куда она ведёт — по тому, откуда открыта карточка:
+    из окна категории — на ту же страницу списка; из ленты за день или период — в календарь; из ленты всей категории — в категорию;
+    в остальных случаях (избранное, пуш, поиск) кнопки нет.
+    Стрелки — карусель: на каждой кнопке номер карточки, куда она ведёт («◀️ 8/22» · «10/22 ▶️»); с первой карточки «назад» ведёт на последнюю.
     is_admin      — админу добавляется кнопка пересмотра («На пересмотре» / «Пересмотрено» — неактивные).
     """
     fav_btn = InlineKeyboardButton(
@@ -60,11 +67,9 @@ def get_event_nav_keyboard(
     if top:
         rows.append(top)
 
-    rows.append([
-        InlineKeyboardButton('🔙', callback_data='nav:prev'),
-        InlineKeyboardButton(f'{current_index + 1} / {total}', callback_data='nav:counter'),
-        InlineKeyboardButton('🔜', callback_data='nav:next'),
-    ])
+    arrows = carousel_row(current_index, total, 'nav:prev', 'nav:next')
+    if arrows:
+        rows.append(arrows)
     rows.append([fav_btn, hide_btn])
 
     if is_admin:
@@ -76,22 +81,12 @@ def get_event_nav_keyboard(
             review_btn = InlineKeyboardButton('🔎 Пересмотр', callback_data=f'rv:open:{surrogate_id}')
         rows.append([review_btn])
 
-    if list_back:
-        rows.append([InlineKeyboardButton('📋 К списку', callback_data=list_back)])
-
-    if category_code and calendar_back:
+    back = list_back or calendar_back or (f'cat:{category_code}' if category_code else None)
+    if back:
         rows.append([
-            InlineKeyboardButton('📅 К календарю', callback_data=calendar_back),
-            InlineKeyboardButton('🗂 К категории', callback_data=f'cat:{category_code}'),
+            InlineKeyboardButton('⬅️ Назад', callback_data=back),
+            InlineKeyboardButton('🏠 В меню', callback_data='nav:menu'),
         ])
-        rows.append([InlineKeyboardButton('🏠 В меню', callback_data='nav:menu')])
     else:
-        rows.append(
-            [
-                InlineKeyboardButton('🗂 К категории', callback_data=f'cat:{category_code}'),
-                InlineKeyboardButton('🏠 В меню', callback_data='nav:menu'),
-            ]
-            if category_code else
-            [InlineKeyboardButton('🏠 В меню', callback_data='nav:menu')]
-        )
+        rows.append([InlineKeyboardButton('🏠 В меню', callback_data='nav:menu')])
     return InlineKeyboardMarkup(rows)

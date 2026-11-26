@@ -92,6 +92,41 @@ CREATE TABLE scheduled_alerts (
     msg_surrogate_id BIGINT REFERENCES messages(surrogate_id)
 );
 
+-- Фильмы киноафиши (миграция 022): названия, перевод и жанры от AI живут здесь, а не в пересобираемых сеансах.
+CREATE TABLE IF NOT EXISTS cinema_movies (
+    id                   BIGSERIAL    PRIMARY KEY,
+    title_key            TEXT         NOT NULL UNIQUE,   -- канонический ключ первого названия (дальше ищем по алиасам)
+    title_serbian        TEXT,
+    title_original       TEXT,                           -- как отдал первый источник (бывает мусор: «RBO 2026 2027»)
+    title_en             TEXT,                           -- AI: международное английское название (или оригинал латиницей)
+    title_ru             TEXT,                           -- AI: русское название, только если устоявшееся
+    genres_ru            TEXT[],                         -- AI: жанры по-русски, первый — главный
+    description_src      TEXT,                           -- самое длинное описание из всех кинотеатров (только растёт)
+    description_src_len  INTEGER      NOT NULL DEFAULT 0,
+    description_ru       TEXT,                           -- AI: перевод description_src
+    translated_src_len   INTEGER,                        -- длина исходника, который переведён (порог повторного перевода)
+    status               TEXT         NOT NULL DEFAULT 'new' CHECK (status IN ('new', 'done', 'failed')),
+    ai_version           TEXT,
+    ai_model             TEXT,
+    created_at           TIMESTAMPTZ  NOT NULL DEFAULT now(),
+    updated_at           TIMESTAMPTZ  NOT NULL DEFAULT now(),
+    last_seen_at         TIMESTAMPTZ  NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS cinema_movie_aliases (
+    alias_key  TEXT    PRIMARY KEY,
+    movie_id   BIGINT  NOT NULL REFERENCES cinema_movies(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_cinema_movie_aliases_movie
+    ON cinema_movie_aliases(movie_id);
+
+CREATE TABLE IF NOT EXISTS cinema_genre_map (
+    term        TEXT         PRIMARY KEY,
+    genre_ru    TEXT,
+    updated_at  TIMESTAMPTZ  NOT NULL DEFAULT now()
+);
+
 CREATE TABLE IF NOT EXISTS cinema_events (
     id                        BIGSERIAL PRIMARY KEY,
     cinema_name               TEXT NOT NULL,
@@ -107,6 +142,7 @@ CREATE TABLE IF NOT EXISTS cinema_events (
     movie_poster_url          TEXT,
     movie_poster_file_id      TEXT,
     movie_poster_msg_id       BIGINT,
+    movie_key                 BIGINT REFERENCES cinema_movies(id) ON DELETE SET NULL,
     showtime                  TIMESTAMPTZ NOT NULL,
     ticket_url                TEXT,
     source                    VARCHAR(20) NOT NULL,
@@ -115,6 +151,9 @@ CREATE TABLE IF NOT EXISTS cinema_events (
 
 CREATE INDEX IF NOT EXISTS idx_cinema_events_showtime
     ON cinema_events(showtime);
+
+CREATE INDEX IF NOT EXISTS idx_cinema_events_movie_key_showtime
+    ON cinema_events(movie_key, showtime);
 
 CREATE INDEX IF NOT EXISTS idx_cinema_events_title_normalized_showtime
     ON cinema_events(movie_title_normalized, showtime);

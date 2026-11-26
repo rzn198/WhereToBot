@@ -17,6 +17,7 @@ from shared.constants import (
     EVENT_PREVIEW_LENGTH,
     EVENT_LIST_PREVIEW_LENGTH,
 )
+from bot.keyboards.carousel import carousel_row
 from bot.handlers.contact import _require_admin, _edit_contact_window, escape_md
 from bot.handlers.calendar import build_calendar, MONTHS_RU, parse_nav_target
 from bot.handlers.events import EVENTS_CITY
@@ -407,14 +408,9 @@ async def _show_admin_hidden_event(
         InlineKeyboardButton('🚫 Скрыть для всех', callback_data=f'admin_hidden:hide:{ref}')
     )
 
-    nav_row = [
-        InlineKeyboardButton('🔙', callback_data='admin_hidden_event:prev'),
-        InlineKeyboardButton(f'{idx+1}/{len(event_ids)}', callback_data='admin_hidden_event:counter'),
-        InlineKeyboardButton('🔜', callback_data='admin_hidden_event:next'),
-    ]
+    nav_row = carousel_row(idx, len(event_ids), 'admin_hidden_event:prev', 'admin_hidden_event:next')
 
-    keyboard = InlineKeyboardMarkup([
-        nav_row,
+    keyboard = InlineKeyboardMarkup(([nav_row] if nav_row else []) + [
         [hide_show_btn],
         [InlineKeyboardButton('📅 Другая дата', callback_data='admin_panel:hidden_events')],
         [InlineKeyboardButton('◀️ В админку', callback_data='admin_panel:main')],
@@ -1022,12 +1018,8 @@ async def _show_alert_event_picker(
     if not row:
         return
 
-    keyboard = InlineKeyboardMarkup([
-        [
-            InlineKeyboardButton('🔙', callback_data='admin_alert_pick:prev'),
-            InlineKeyboardButton(f'{idx+1}/{len(event_ids)}', callback_data='admin_alert_pick:counter'),
-            InlineKeyboardButton('🔜', callback_data='admin_alert_pick:next'),
-        ],
+    pick_nav = carousel_row(idx, len(event_ids), 'admin_alert_pick:prev', 'admin_alert_pick:next')
+    keyboard = InlineKeyboardMarkup(([pick_nav] if pick_nav else []) + [
         [InlineKeyboardButton('✅ Выбрать это событие', callback_data=f'admin_alert_pick:select:{surrogate_id}')],
         [InlineKeyboardButton('❌ Отмена', callback_data='admin_panel:main')],
     ])
