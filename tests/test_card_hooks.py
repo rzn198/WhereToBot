@@ -528,3 +528,13 @@ async def test_force_recomputes_up_to_date_line_without_copying_itself(pool):
     forced = await run_pass(pool, make_client(ai), ST, city='Belgrade', horizon_days=30, today=TODAY, force=True)
     assert forced.candidates == 1 and forced.generated == 1 and forced.copied == 0 and len(calls) == 2
     assert (await row(pool, eid))['hook'] == 'впервые в Сербии'
+
+
+def test_games_profile_formulas_order_and_fallback_emoji():
+    """«Игры и развлечения»: хук есть; порядок: формат+язык → кто выступает+тема → условия (решение Дениса); запасной эмодзи 🎉; без веба."""
+    from card_lines.profiles import build_profiles
+    p = build_profiles({})['Игры и развлечения']
+    assert p.has_hook and [f.name for f in p.formulas] == ['формат + язык', 'кто выступает + тема', 'условия']
+    assert not any(f.web or f.web_only for f in p.formulas) and not p.enrich
+    assert p.fallback_emoji == '🎉' and p.values['квиз'] == '🧠' and p.values['паб-тур'] == '🍻'
+    assert p.emoji_for('') == '🎉' and p.emoji_for('стендап') == '🎤'
