@@ -207,16 +207,19 @@ def test_prompt_limits_festival_and_second_category():
     assert "ОДНОЙ" in p and "НЕ являются" in p
 
 
-def test_prompt_v3_concert_rule():
-    """v3: слово «концерт/koncert/concert» в названии — «Концерты» обязательна (случай «Гала-концерт»); версия в хэше кэша."""
+def test_prompt_v4_concert_rule_and_new_rules():
+    """v3+: слово «концерт/koncert/concert» в названии — «Концерты» обязательна (случай «Гала-концерт»); версия в хэше кэша."""
     from event_collector import ai_categories as m
-    assert m.PROMPT_VERSION == 'v3'
+    assert m.PROMPT_VERSION == 'v4'
     it = EventItem(source='polako', source_url='u', title='Гала-концерт классической музыки',
                    starts_at=datetime(2026, 11, 20), description='')
     prompt = m.build_user_prompt(it, ['Концерты', 'Кино/Театр'], 1200)
     assert 'концерт' in prompt and 'koncert' in prompt and 'обязательно' in prompt
     assert m.input_hash(it, 1200) != hashlib.md5(
-        json.dumps(['v2', it.title, it.venue, it.category_hint, ''], ensure_ascii=False).encode('utf-8')).hexdigest()
+        json.dumps(['v3', it.title, it.venue, it.category_hint, ''], ensure_ascii=False).encode('utf-8')).hexdigest()
+    # v4: мюзикл/балет — театр, вечеринка и лайнап — концерты, ярмарка — выставки/ярмарки, кинофестиваль — фестивали + кино
+    assert 'Мюзикл, опера, балет' in prompt and 'а не «Игры и развлечения»' in prompt and 'ярмарки' in prompt
+    assert 'кинофестиваля' in prompt
 
 
 @pytest.mark.skipif(not DSN, reason="нужна DEDUP_TEST_DSN")
@@ -246,3 +249,22 @@ async def test_hidden_events_are_not_recategorized():
         assert await pool.fetchval("SELECT count(*) FROM event_ai_categories") == 1
     finally:
         await pool.close()
+
+
+def test_regression_cases_file_is_valid():
+    """scripts/category_cases.json (эталон ошибок категорий, ноябрь 2026): категории из белого списка, у каждого случая есть условие,
+    формат читается scripts/check_event_categories.py."""
+    import json
+    import os
+    from collector.categorizer_v2 import category_names
+    path = os.path.join(os.path.dirname(__file__), '..', 'scripts', 'category_cases.json')
+    cases = json.load(open(path, encoding='utf-8'))
+    allowed = set(category_names())
+    assert len(cases) >= 40
+    for c in cases:
+        assert c['title'] and (c['must'] or c['forbid']), c['id']
+        assert set(c['must']) | set(c['forbid']) <= allowed, c['id']
+        assert len(c['description']) <= 350
+    from scripts.check_event_categories import to_item, verdict
+    assert to_item(cases[0]).title == cases[0]['title']
+    assert verdict({'must': ['A'], 'forbid': ['B']}, ['A']) == 'OK' and verdict({'must': ['A']}, ['B']).startswith('ПРОВАЛ')

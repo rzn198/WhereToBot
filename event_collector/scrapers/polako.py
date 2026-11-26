@@ -129,6 +129,12 @@ CATEGORY_MAP: dict[str, str | None] = {
     "Шоу и перформансы": None,
 }
 
+# Широкие разделы сайта: организаторы ставят в них что попало (проверка по базе, ноябрь 2026: в «Экскурсиях и турах» около 74% событий
+# другой категории, в «Stand-up»/«Квиз» около 58%, в «Sport» 35%, в «Мастер-классах»/«Лекциях» 29%). Категория из такого раздела — подсказка,
+# а не истина: basis='aggregate', и AI-категоризация (scope unreliable) вправе её заменить. Остальные разделы (концерты, театр, кино,
+# выставки, фестивали, детские) остаются точными.
+BROAD_SECTIONS = frozenset({"Экскурсии и туры", "Stand-up и юмор", "Квиз", "Sport", "Мастер-классы", "Лекции и встречи"})
+
 LANG_PRIORITY = ["ru", "en", "sr"]
 
 # якоря-«мусор» для ссылок [текст](url): если текст такой — убираем ссылку
@@ -352,7 +358,7 @@ class PolakoScraper(BaseScraper):
         site_cat = ((ev.get("category") or {}).get("name") or "").strip()
         mapped = CATEGORY_MAP.get(site_cat)
         if mapped:
-            event_types, basis = [mapped], 'site'
+            event_types, basis = [mapped], ('aggregate' if site_cat in BROAD_SECTIONS else 'site')
         else:
             # у сайта категории нет, она неоднозначна или новая — словарь по тексту (+AI-проверка)
             if site_cat and site_cat not in CATEGORY_MAP:
