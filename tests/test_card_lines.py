@@ -27,6 +27,7 @@ needs_pg = pytest.mark.skipif(not DSN, reason="нужна DEDUP_TEST_DSN (Postgr
 TODAY = date.today() + timedelta(days=2)
 PROFILES = build_profiles(None)
 CONCERT = PROFILES['Концерты']
+PLAIN = build_profiles({'Простой': {'attr_name': 'тип', 'values': {'a': 'X', 'b': 'Y'}, 'rules': 'r'}})['Простой']   # один атрибут, без запасного эмодзи
 FAMILY = PROFILES['Семейные/детские']
 
 
@@ -52,7 +53,7 @@ def test_canonical_value_pattern_for_age():
 
 def test_emoji_for_value_and_pattern():
     assert CONCERT.emoji_for('рок') == '🎸'
-    assert CONCERT.emoji_for(None) == '🎵' and PROFILES['Кино/Театр'].emoji_for(None) == ''      # fallback только у концертов
+    assert CONCERT.emoji_for(None) == '🎵' and PLAIN.emoji_for(None) == ''      # fallback только у профилей, где он задан
     assert FAMILY.emoji_for('6+') == '🧸'
 
 
@@ -73,7 +74,7 @@ def test_build_profiles_override_and_extend():
     })
     assert p['Концерты'].version == 'v3' and p['Концерты'].values == {'рок': '🤘'} and p['Концерты'].attr_name == 'жанр'
     assert p['Новая'].has_attr and p['Музеи'].ai
-    assert p['Спорт/активный отдых'].version == 'v1'
+    assert p['Спорт/активный отдых'].version == DEFAULT_PROFILES['Спорт/активный отдых'].get('version', 'v1')   # мусорная правка игнорируется
     assert set(DEFAULT_PROFILES) <= set(p)
     assert build_profiles('мусор')['Концерты'].version == 'v2' and build_profiles('мусор')['Концерты'].max_values == 2
 
@@ -201,7 +202,7 @@ def ev_ai(title='ZOSTER', ai_title='Zoster', attr='рок', profile='Конце�
 def test_line_ai_format_emoji_title_value_time():
     assert w.line_text(ev_ai(tm=time(21, 0)), ST, ON) == '🎸 Zoster · рок · 21:00'
     assert w.line_text(ev_ai(attr=None), ST, ON) == '🎵 Zoster'                       # жанр не определён: общий эмодзи концертов, слова жанра нет
-    assert w.line_text(ev_ai(attr=None, profile='Кино/Театр'), ST, ON) == 'Zoster'  # у остальных профилей без значения нет и эмодзи
+    assert w.line_text(ev_ai(attr=None, profile='Семейные/детские'), ST, ON) == 'Zoster'  # у остальных профилей без значения нет и эмодзи
     assert w.line_text(ev_ai(attr='рок', profile='Неизвестный'), ST, ON) == 'Zoster · рок'
     assert w.line_text(ev_ai(profile=None), ST, ON) == 'Zoster · рок'
 
@@ -664,14 +665,14 @@ def test_canonical_values_list_string_dedup_and_limit():
     assert CONCERT.canonical_values(['рок', 'рок', 'джаз', 'блюз']) == ['рок', 'джаз']        # без повторов, не больше max_values
     assert CONCERT.canonical_values(['гранж', 'рок']) == ['рок']                                # лишнее не из списка отбрасывается
     assert CONCERT.canonical_values([]) == [] and CONCERT.canonical_values(None) == [] and CONCERT.canonical_values({'a': 1}) == []
-    assert PROFILES['Кино/Театр'].canonical_values(['фильм', 'спектакль']) == ['фильм']          # max_values=1: берём первое
+    assert PLAIN.canonical_values(['a', 'b']) == ['a']          # max_values=1: берём первое
     assert FAMILY.canonical_values('6+') == ['6+']
 
 
 def test_emoji_for_several_values_and_fallbacks():
     assert CONCERT.emoji_for('рок,вечеринка') == '🎸🪩' and CONCERT.emoji_for('рок') == '🎸'
     assert CONCERT.emoji_for('джаз/блюз') == '🎵'          # значение убрали из списка и ещё не пересчитано: общий эмодзи
-    assert PROFILES['Кино/Театр'].emoji_for('джаз/блюз') == ''
+    assert PLAIN.emoji_for('джаз/блюз') == ''
 
 
 def test_parse_single_accepts_list_and_stores_comma_joined():
@@ -684,7 +685,7 @@ def test_parse_single_accepts_list_and_stores_comma_joined():
 def test_prompt_asks_list_for_concerts_and_string_for_single_value_profiles():
     p = build_user_prompt(cand(), 1200, 40)
     assert 'СПИСОК из 1–2 значений' in p and '["..."] или []' in p
-    f = build_user_prompt(cand(profile=PROFILES['Кино/Театр']), 1200, 40)
+    f = build_user_prompt(cand(profile=PLAIN), 1200, 40)
     assert 'СПИСОК' not in f and '"..." или null' in f
     assert '["..."] или []' in build_batch_prompt([cand(id=1), cand(id=2)], 1200, 40)
 

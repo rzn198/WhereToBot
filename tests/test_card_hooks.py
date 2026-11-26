@@ -538,3 +538,61 @@ def test_games_profile_formulas_order_and_fallback_emoji():
     assert not any(f.web or f.web_only for f in p.formulas) and not p.enrich
     assert p.fallback_emoji == '🎉' and p.values['квиз'] == '🧠' and p.values['паб-тур'] == '🍻'
     assert p.emoji_for('') == '🎉' and p.emoji_for('стендап') == '🎤'
+
+
+def test_cinema_theatre_profile_two_hierarchies_and_emoji():
+    """«Кино/Театр»: для фильма «о чём + режиссёр», для спектакля «жанр + суть», дальше общий порядок; два эмодзи; запасной 🎭."""
+    from card_lines.profiles import build_profiles
+    p = build_profiles({})['Кино/Театр']
+    names = [f.name for f in p.formulas]
+    assert names == ['о чём + режиссёр', 'жанр + суть', 'повод', 'кто играет или ставит', 'для кого и условия', 'что ждёт зрителя']
+    assert 'фильм' in p.formulas[0].need and 'спектакл' in p.formulas[1].need
+    assert not any(f.web or f.web_only for f in p.formulas) and not p.enrich
+    assert p.max_values == 2 and p.fallback_emoji == '🎭'
+    assert p.emoji_for('опера, детский') == '🎼🧸' and p.emoji_for('комедия') == '😄' and p.emoji_for('') == '🎭'
+
+
+def test_workshops_profile_two_hierarchies_and_emoji():
+    """«Мастер-классы/Нетворкинг»: учебные — чему научат → кто ведёт → условия; встречи — тема → как проходит → условия."""
+    from card_lines.profiles import build_profiles
+    p = build_profiles({})['Мастер-классы/Нетворкинг']
+    assert [f.name for f in p.formulas] == ['чему научат', 'тема или идея', 'кто ведёт + тема', 'формат и программа', 'для кого и условия']
+    assert not any(f.web or f.web_only for f in p.formulas) and not p.enrich
+    assert p.fallback_emoji == '🎓' and p.emoji_for('дегустация') == '🍷' and p.emoji_for('вебинар') == '💻'
+    assert p.emoji_for('творческая мастерская') == '🎨' and p.emoji_for('') == '🎓'
+
+
+def test_exhibitions_profile_two_hierarchies_and_emoji():
+    """«Выставки/Ярмарки»: выставка — о чём+автор → что в экспозиции → повод → условия; ярмарка — что и зачем → повод → условия."""
+    from card_lines.profiles import build_profiles
+    p = build_profiles({})['Выставки/Ярмарки']
+    assert [f.name for f in p.formulas] == ['о чём + автор', 'что в экспозиции', 'что и зачем', 'повод и участники', 'условия']
+    assert 'выставки' in p.formulas[0].need and 'ярмарки' in p.formulas[2].need
+    assert not any(f.web or f.web_only for f in p.formulas) and not p.enrich
+    assert p.max_values == 2 and p.fallback_emoji == '🖼'
+    assert p.emoji_for('ярмарка, благотворительная') == '🛍💝' and p.emoji_for('рождественская ярмарка') == '🎄'
+
+
+def test_sport_profile_hierarchy_and_emoji():
+    """«Спорт/активный отдых»: матч → главное → программа → что ждёт → условия (любительские занятия — по hook_rules); 🏅 запасной."""
+    from card_lines.profiles import build_profiles
+    p = build_profiles({})['Спорт/активный отдых']
+    assert [f.name for f in p.formulas] == ['матч: кто с кем', 'главное в событии', 'программа и дистанции', 'что ждёт зрителя',
+                                           'для кого и условия']
+    assert 'любительских' in p.hook_rules and not any(f.web or f.web_only for f in p.formulas) and not p.enrich
+    assert 'настолки' not in p.values and p.fallback_emoji == '🏅' and p.max_values == 1
+    assert p.emoji_for('мотоспорт') == '🏍' and p.emoji_for('водное поло') == '🤽' and p.emoji_for('') == '🏅'
+
+
+def test_festivals_family_trips_profiles():
+    """Фестивали, Семейные/детские, Поездки и экскурсии: порядок формул утверждён Денисом, без веба, эмодзи."""
+    from card_lines.profiles import build_profiles
+    p = build_profiles({})
+    f, fam, t = p['Фестивали'], p['Семейные/детские'], p['Поездки и экскурсии']
+    assert [x.name for x in f.formulas] == ['тема и масштаб', 'повод', 'участники и гости', 'условия']
+    assert [x.name for x in fam.formulas] == ['что будет + для кого', 'что ждёт ребёнка', 'условия']
+    assert [x.name for x in t.formulas] == ['маршрут и что увидим', 'условия', 'для кого и повод']
+    for prof in (f, fam, t):
+        assert not any(x.web or x.web_only for x in prof.formulas) and not prof.enrich
+    assert f.fallback_emoji == '🎪' and f.emoji_for('наука') == '🔬' and f.emoji_for('зимний') == '🎄'
+    assert fam.emoji_for('4–7') == '🧸' and t.fallback_emoji == '🧭' and t.emoji_for('музейная экскурсия') == '🏛'
