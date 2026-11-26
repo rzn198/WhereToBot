@@ -31,6 +31,7 @@ outputs/
 
 # Local DB exports
 *.json
+!scripts/category_cases.json
 *.sql~
 
 # Code review artifacts
