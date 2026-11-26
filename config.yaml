@@ -63,7 +63,7 @@ cinema_collector:
     alerts_in_local: false
 
 cinema_ai:
-  method: off          # off | shadow | on
+  method: on          # off | shadow | on
 
 event_collector:
   parse_interval_hours: 8

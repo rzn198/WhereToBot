@@ -4,6 +4,7 @@
 from datetime import date, timedelta, date as date_type
 from datetime import datetime
 from zoneinfo import ZoneInfo
+from loguru import logger
 from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton
 from telegram.ext import ContextTypes
 
@@ -18,7 +19,7 @@ BELGRADE_TZ = ZoneInfo('Europe/Belgrade')
 
 async def _get_unique_movies(pool, target_date: str) -> list[dict]:
     parsed_date = date_type.fromisoformat(target_date)
-    today = date_type.today()
+    today = belgrade_today()
 
     if parsed_date == today:
         now_utc = datetime.now(tz=BELGRADE_TZ).astimezone(__import__('zoneinfo').ZoneInfo('UTC'))
@@ -54,7 +55,7 @@ async def _get_unique_movies(pool, target_date: str) -> list[dict]:
 
 async def _get_movie_sessions(pool, movie_title_normalized: str, target_date: str) -> list[dict]:
     parsed_date = date_type.fromisoformat(target_date)
-    today = date_type.today()
+    today = belgrade_today()
 
     if parsed_date == today:
         now_utc = datetime.now(tz=BELGRADE_TZ).astimezone(__import__('zoneinfo').ZoneInfo('UTC'))
@@ -80,6 +81,23 @@ async def _get_movie_sessions(pool, movie_title_normalized: str, target_date: st
     return [dict(r) for r in rows]
 
 
+async def _new_afisha_opened(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
+    """Режим киноафиши new (или new_admin для админа): сразу список фильмов на сегодня. Любой сбой — прежняя афиша."""
+    from db.settings import resolve_cinema_mode
+    pool = context.bot_data.get('pool')
+    try:
+        if await resolve_cinema_mode(pool, update.effective_user.id) != 'new':
+            return False
+        from bot.handlers.cinema_window import open_afisha
+        await open_afisha(update, context)
+        return True
+    except Exception as e:
+        logger.exception('CINEMA_UI | новая афиша не открылась, показываем прежнюю')
+        from bot.handlers.cinema_window import _alert_admin
+        await _alert_admin(context, f'⚠️ Киноафиша (новая): ошибка {type(e).__name__}: {e}\nПользователю показана прежняя афиша.')
+        return False
+
+
 async def handle_cinema_menu(
     update: Update,
     context: ContextTypes.DEFAULT_TYPE,
@@ -88,6 +106,9 @@ async def handle_cinema_menu(
     await query.answer()
 
     chat_id = update.effective_chat.id
+
+    if await _new_afisha_opened(update, context):
+        return
 
     context.user_data.pop('cinema_movies', None)
     context.user_data.pop('cinema_index', None)
