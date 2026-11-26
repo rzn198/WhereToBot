@@ -93,6 +93,7 @@ from bot.handlers.cinema_window import (
     handle_cinema_list, handle_cinema_day, handle_cinema_calendar as handle_cinema_window_calendar,
     handle_cinema_calendar_nav as handle_cinema_window_calendar_nav, handle_cinema_card, handle_cinema_desc as handle_cinema_window_desc,
     handle_cinema_sessions as handle_cinema_window_sessions, handle_cinema_pick as handle_cinema_window_pick,
+    handle_cinema_fav_toggle, handle_cinema_fav_list, handle_cinema_fav_open, handle_cinema_fav_delete,
 )
 from bot.handlers.category_window import handle_window_list
 from bot.handlers.unnamed import handle_unnamed, handle_unnamed_text
@@ -297,6 +298,10 @@ async def main():
     app.add_handler(CallbackQueryHandler(handle_cinema_window_desc, pattern=r'^cmd:'))
     app.add_handler(CallbackQueryHandler(handle_cinema_window_sessions, pattern=r'^cms:'))
     app.add_handler(CallbackQueryHandler(handle_cinema_window_pick, pattern=r'^cmp:'))
+    app.add_handler(CallbackQueryHandler(handle_cinema_fav_toggle, pattern=r'^cf[ar]:'))
+    app.add_handler(CallbackQueryHandler(handle_cinema_fav_list, pattern=r'^cfl$'))
+    app.add_handler(CallbackQueryHandler(handle_cinema_fav_open, pattern=r'^cfo:'))
+    app.add_handler(CallbackQueryHandler(handle_cinema_fav_delete, pattern=r'^cfd:'))
     app.add_handler(CallbackQueryHandler(handle_cinema_menu, pattern='^cinema:menu$'))
     app.add_handler(CallbackQueryHandler(handle_cinema_calendar, pattern='^cinema:calendar$'))
     app.add_handler(CallbackQueryHandler(handle_cinema_calendar_nav, pattern='^cinema_cal_nav:'))

@@ -18,7 +18,9 @@ from telegram.error import BadRequest, Forbidden, RetryAfter, TelegramError
 from bot.formatters.event_card import format_date_ru
 from bot.utils.links import bot_card_url, post_url
 from collector.entities.utf16 import utf16_len
-from db import push_log
+from bot.utils.cinema_text import clean_title
+from bot.utils.links import cinema_card_url
+from db import cinema_favorites, push_log
 from db.tables import Tables
 from shared.config import config
 
@@ -36,11 +38,12 @@ _WS = re.compile(r'\s+')
 
 @dataclass
 class Item:
-    kind: str            # 'm' пост | 'e' событие
+    kind: str            # 'm' пост | 'e' событие | 'c' сеанс киноафиши
     text: str            # пост: текст; событие: название
     venue: str = ''
     url: str = ''        # событие: билеты (source_url); пост: оригинал в канале ('' — ссылки нет)
-    ref: int | None = None   # пост: surrogate_id — по нему ссылка ведёт на карточку в боте
+    ref: int | None = None   # пост: surrogate_id — по нему ссылка ведёт на карточку в боте; сеанс: id фильма
+    when: str = ''       # сеанс: время ЧЧ:ММ
 
 
 def belgrade_today() -> date:
@@ -59,10 +62,17 @@ def shorten(text: str, limit: int) -> str:
     return cut.rstrip(' ,.;:!?-–—(') + '…'
 
 
-def _block(i: int, item: Item, max_chars: int, bot_username: str | None = None) -> tuple[str, list[tuple[int, int, str]]]:
+def _block(i: int, item: Item, max_chars: int, bot_username: str | None = None, day: date | None = None) -> tuple[str, list[tuple[int, int, str]]]:
     """Текст одного пункта и ссылки в нём: (смещение, длина, url) в UTF-16."""
     prefix = f'{i}. '
     links: list[tuple[int, int, str]] = []
+    if item.kind == 'c':
+        title = shorten(item.text, max_chars) or '(без названия)'
+        text = f'{prefix}🎬 {title}'
+        if bot_username and item.ref and day is not None:
+            links.append((utf16_len(f'{prefix}🎬 '), utf16_len(title), cinema_card_url(bot_username, item.ref, day)))
+        text += f' · {item.when}' + (f' — {item.venue}' if item.venue else '')
+        return text, links
     if item.kind == 'e':
         title = shorten(item.text, max_chars) or '(без названия)'
         text = prefix + title
@@ -92,7 +102,7 @@ def build_messages(items: list[Item], day: date, today: date | None = None, max_
     cfg = config['push']
     max_chars = max_chars or cfg['max_chars']
     head = (header or cfg['header']).format(date=format_date_ru(day, today or day))
-    blocks = [_block(i, it, max_chars, bot_username) for i, it in enumerate(items, 1)]
+    blocks = [_block(i, it, max_chars, bot_username, day) for i, it in enumerate(items, 1)]
 
     parts: list[tuple[str, list[MessageEntity]]] = []
     text, ents = head, []
@@ -134,7 +144,7 @@ async def bot_username(bot: Bot) -> str | None:
 
 def keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton('⭐ В запланированное', callback_data=OPEN_FAVORITES)],
+        [InlineKeyboardButton('❤️ В запланированное', callback_data=OPEN_FAVORITES)],
         [InlineKeyboardButton('Закрыть', callback_data=CLOSE)],
     ])
 
@@ -173,6 +183,13 @@ async def fetch_items(pool, day: date, user_id: int | None = None) -> dict[int, 
     out: dict[int, list[Item]] = {}
     for r in await pool.fetch(_SELECT_FAV, day, user_id):
         out.setdefault(r['user_id'], []).append(_item(r))
+    try:                      # сеансы киноафиши идут после постов и событий; их сбой не должен ломать остальной пуш
+        for r in await cinema_favorites.fetch_for_push(pool, day, user_id):
+            title = (r['title_en'] or '').strip() or clean_title(r['title_serbian'] or r['title_original']) or 'Без названия'
+            out.setdefault(r['user_id'], []).append(Item(
+                'c', title, r['cinema_name'], ref=r['movie_id'], when=f"{r['showtime'].astimezone(BELGRADE):%H:%M}"))
+    except Exception as e:
+        logger.error(f"PUSH_CINEMA_FAILED | {type(e).__name__}: {e}")
     return out
 
 
@@ -341,7 +358,7 @@ async def send_preview(bot: Bot, pool, admin_id: int) -> str:
         if nearest:
             day = nearest
             items = (await fetch_items(pool, day, admin_id)).get(admin_id)
-            note = f'в вашем избранном на сегодня пусто, показан ближайший день с ⭐'
+            note = f'в вашем избранном на сегодня пусто, показан ближайший день с ❤️'
     if not items:
         day = today
         demo = await _demo_items(pool, today)

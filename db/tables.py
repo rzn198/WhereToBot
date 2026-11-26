@@ -11,6 +11,7 @@ class Tables:
     CINEMA_MOVIES         = 'cinema_movies'
     CINEMA_MOVIE_ALIASES  = 'cinema_movie_aliases'
     CINEMA_GENRE_MAP      = 'cinema_genre_map'
+    CINEMA_FAVORITES      = 'cinema_favorites'
     EVENTS                = 'events'
     EVENT_FAVORITES       = 'event_favorites'
     EVENT_HIDDEN          = 'event_hidden'

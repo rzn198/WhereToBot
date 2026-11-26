@@ -2,7 +2,7 @@ import json
 import asyncpg
 from datetime import date, timedelta
 from loguru import logger
-from telegram import Update, MessageEntity
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update, MessageEntity
 from telegram.ext import ContextTypes
 from collector.entities.truncator import truncate_if_needed, EventText
 from collector.entities.utf16 import utf16_len
@@ -239,7 +239,21 @@ async def show_current_event(
     current_index = context.user_data.get('current_index', 0)
     expanded = context.user_data.get('expanded', False)
 
+    in_favorites = context.user_data.get('current_filter') == 'favorites'
+    cinema_favs = await _cinema_favs_count(pool, user_id) if in_favorites else 0
+
     if not event_ids:
+        if cinema_favs:          # событий в запланированном нет, но есть сеансы киноафиши
+            await edit_or_send(
+                context=context,
+                chat_id=chat_id,
+                text='Событий в запланированном нет 🤷',
+                keyboard=InlineKeyboardMarkup([
+                    [InlineKeyboardButton(f'🎬 Кино ({cinema_favs})', callback_data='cfl')],
+                    [InlineKeyboardButton('🏠 В меню', callback_data='nav:menu')],
+                ]),
+            )
+            return
         await edit_or_send(
             context=context,
             chat_id=chat_id,
@@ -296,6 +310,7 @@ async def show_current_event(
             under_review=under_review,
             reviewed=reviewed,
             list_back=list_back,
+            cinema_favs=cinema_favs,
         )
         await edit_or_send(
             context=context,
@@ -361,6 +376,7 @@ async def show_current_event(
         under_review=under_review,
         reviewed=reviewed,
         list_back=list_back,
+        cinema_favs=cinema_favs,
     )
 
     await edit_or_send(
@@ -400,6 +416,16 @@ async def handle_filter(
         filter_name = data.split(':')[1]
 
     await open_filter(update, context, filter_name)
+
+
+async def _cinema_favs_count(pool, user_id: int) -> int:
+    """Сколько сеансов киноафиши у пользователя в запланированном; сбой не должен ломать ленту."""
+    try:
+        from db import cinema_favorites
+        return await cinema_favorites.count_upcoming(pool, user_id)
+    except Exception as e:
+        logger.warning(f"CINEMA_FAV_COUNT_FAILED | {type(e).__name__}: {e}")
+        return 0
 
 
 async def open_filter(

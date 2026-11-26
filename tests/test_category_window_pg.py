@@ -108,9 +108,9 @@ async def test_big_day_renders_fast_and_fits_one_message(pool):
     ms = (_time.perf_counter() - t0) * 1000
     assert len(items) == 28 and lay.pages == 2 and len(lay.shown) == 15 and len(text) < 4096
     assert ms < 500, f'окно на 28 записей строилось {ms:.0f} мс'
-    # период на 3 недели по 1000 записям: сводка по дням, один ответ без ошибок
+    # период на 3 недели по 1000 записям: список страницами, страница помещается в одно сообщение
     t0 = _time.perf_counter()
     items = await load_items(pool, U1, 'concerts', TODAY, TODAY + timedelta(days=22))
     lay = w.layout_window(items, 'H', TODAY, TODAY + timedelta(days=22), date.today(), w.WindowSettings())
-    assert lay.mode == 'aggregate' and len(w.render_text(lay)[0]) < 4096
+    assert lay.mode == 'list' and lay.pages > 1 and len(w.render_text(lay)[0]) < 4096
     assert (_time.perf_counter() - t0) * 1000 < 1500

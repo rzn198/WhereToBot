@@ -91,7 +91,7 @@ def test_long_push_is_split_with_continuous_numbering_and_valid_links():
 def test_keyboard_order_and_callbacks():
     rows = push.keyboard().inline_keyboard
     assert [[(b.text, b.callback_data) for b in r] for r in rows] == [
-        [("⭐ В запланированное", "alert:fav")], [("Закрыть", "alert:dismiss")]]
+        [("❤️ В запланированное", "alert:fav")], [("Закрыть", "alert:dismiss")]]
 
 
 # ------------------------------------------------------------------ доставка

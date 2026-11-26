@@ -32,6 +32,7 @@ def get_event_nav_keyboard(
     under_review: bool = False,
     reviewed: bool = False,
     list_back: str | None = None,
+    cinema_favs: int = 0,
 ) -> InlineKeyboardMarkup:
     """Кнопки карточки.
 
@@ -39,6 +40,7 @@ def get_event_nav_keyboard(
     calendar_back — callback_data возврата в календарь (лента за день или период из календаря категории).
     event_date    — дата события: над стрелками показывается некликабельная кнопка с датой.
     list_back     — callback_data возврата на страницу списка (карточка открыта из окна категории).
+    cinema_favs   — число сеансов киноафиши в запланированном (только в ленте избранного): кнопка «🎬 Кино (N)».
 
     Возврат одной кнопкой «⬅️ Назад» (рядом с «🏠 В меню»), куда она ведёт — по тому, откуда открыта карточка:
     из окна категории — на ту же страницу списка; из ленты за день или период — в календарь; из ленты всей категории — в категорию;
@@ -71,6 +73,8 @@ def get_event_nav_keyboard(
     if arrows:
         rows.append(arrows)
     rows.append([fav_btn, hide_btn])
+    if cinema_favs:          # в запланированном есть сеансы киноафиши: вход в их список
+        rows.append([InlineKeyboardButton(f'🎬 Кино ({cinema_favs})', callback_data='cfl')])
 
     if is_admin:
         if reviewed:

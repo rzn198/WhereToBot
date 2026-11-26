@@ -25,10 +25,11 @@ def flat_callbacks(kb):
 def test_main_menu_has_three_rows_and_no_date_buttons():
     kb = get_main_menu_inline(is_admin=False)
     r = rows(kb)
-    assert [len(x) for x in r[:3]] == [1, 1, 1]            # три кнопки в три ряда
-    assert r[0][0][1] == 'cat:concerts'
-    assert r[1][0][1] == 'cat:fun'
-    assert r[2][0][1] == 'cats:menu' and 'Остальные события' in r[2][0][0]
+    assert [len(x) for x in r[:4]] == [1, 1, 1, 1]         # четыре кнопки в четыре ряда
+    assert [r[i][0][1] for i in range(3)] == ['cat:concerts', 'cat:fun', 'cat:learn']
+    assert r[3][0][1] == 'cats:menu' and 'Остальные события' in r[3][0][0]
+    assert [r[4][0][1], r[5][0][1]] == ['cinema:menu', 'filter:favorites']      # афиша кинотеатров, затем запланированное
+    assert r[5][0][0].startswith('❤️')
     cb = flat_callbacks(kb)
     for gone in ('filter:today', 'filter:tomorrow', 'filter:week', 'filter:calendar'):
         assert gone not in cb
