@@ -132,6 +132,12 @@ async def run_all_scrapers(pool, bot=None) -> None:
     except Exception as e:
         logger.error(f"DESCRIPTIONS_SYNC_ERROR | {e}")
 
+    try:
+        from cinema_ai.hook import trigger as trigger_cinema_ai
+        trigger_cinema_ai(pool)                    # off по умолчанию; в фоне, афишу не задерживает
+    except Exception as e:
+        logger.error(f"CINEMA_AI_TRIGGER_ERROR | {e}")
+
     total = sum(r.saved for r in results)
     logger.info(f"CINEMA_RUN_DONE | total_saved={total} | seconds={time.perf_counter() - t0:.1f}")
 

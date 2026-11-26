@@ -108,6 +108,8 @@ CREATE TABLE IF NOT EXISTS cinema_movies (
     status               TEXT         NOT NULL DEFAULT 'new' CHECK (status IN ('new', 'done', 'failed')),
     ai_version           TEXT,
     ai_model             TEXT,
+    ai_titles_fails      INTEGER      NOT NULL DEFAULT 0,       -- неудачи этапа названий подряд (3 = этап пропускаем)
+    ai_desc_fails        INTEGER      NOT NULL DEFAULT 0,       -- неудачи перевода описания подряд (3 = пропускаем)
     created_at           TIMESTAMPTZ  NOT NULL DEFAULT now(),
     updated_at           TIMESTAMPTZ  NOT NULL DEFAULT now(),
     last_seen_at         TIMESTAMPTZ  NOT NULL DEFAULT now()

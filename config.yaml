@@ -62,6 +62,9 @@ cinema_collector:
     remind_hours: 24            # повтор алерта не чаще, чем раз в N часов
     alerts_in_local: false
 
+cinema_ai:
+  method: off          # off | shadow | on
+
 event_collector:
   parse_interval_hours: 8
   refresh_upcoming_days: 7
