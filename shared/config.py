@@ -50,6 +50,7 @@ def load_config() -> dict:
     cfg['card_lines'] = _card_lines_section(cfg.get('card_lines') or {}, cfg['opencode'])
     cfg['parsing'] = _parsing_section(cfg.get('parsing') or {}, cfg['opencode'])
     cfg['deduplication'] = _dedup_section(cfg.get('deduplication') or {}, cfg['opencode'])
+    cfg['cinema_ai'] = _cinema_ai_section(cfg.get('cinema_ai') or {}, cfg['opencode'], cfg['translation'])
     cfg['push'] = _push_section(cfg.get('push') or {}, cfg.get('scheduler') or {})
     cfg['event_categories'] = _event_categories_section((cfg.get('event_collector') or {}).get('categories') or {}, cfg['opencode'])
 
@@ -152,6 +153,25 @@ def _translation_section(y: dict, oc: dict) -> dict:
         'run_on_start': bool(y.get('run_on_start', True)),
         'alerts': bool(y.get('alerts', True)),          # сообщения админу о сбоях перевода (один раз на эпизод)
     }
+
+
+CINEMA_AI_METHODS = ('off', 'shadow', 'on')
+
+
+def _cinema_ai_section(y: dict, oc: dict, tr: dict) -> dict:
+    """AI киноафиши: названия фильмов (склейка, английское и русское), жанры, перевод описания (запускается из cinema_collector).
+    Ключ и цепочка моделей общие с переводчиком (OPENCODE_TRANSLATE_API_KEY, translation.models), если свои не заданы.
+    method: off | shadow (только лог) | on. Остальные параметры разбирает cinema_ai.settings."""
+    out = dict(y)
+    out['method'] = _word(os.getenv('CINEMA_AI_METHOD') or y.get('method'), 'off')
+    if out['method'] not in CINEMA_AI_METHODS:
+        out['method'] = 'off'
+    out['models'] = list(y.get('models') or tr.get('models') or [])
+    out['base_url'] = y.get('base_url') or oc['base_url']
+    out['api_key'] = os.getenv('OPENCODE_TRANSLATE_API_KEY') or os.getenv('OPENCODE_API_KEY', '')
+    out['timeout'] = float(y.get('timeout', 90))
+    out['temperature'] = y.get('temperature', 0)
+    return out
 
 
 def _card_lines_section(y: dict, oc: dict) -> dict:
