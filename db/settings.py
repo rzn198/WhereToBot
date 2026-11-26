@@ -93,3 +93,47 @@ async def resolve_category_mode(pool, user_id: int | None) -> str:
     if mode == 'window_admin' and user_id is not None and user_id == config['telegram']['admin_user_id']:
         return 'window'
     return 'cards'
+
+
+# ---------------------------------------------------------------- режим киноафиши
+KEY_CINEMA_MODE = 'ui.cinema_mode'
+
+# old — прежняя киноафиша; new_admin — новая окном только админу (проверка перед запуском); new — новая всем.
+CINEMA_MODES = ('old', 'new_admin', 'new')
+DEFAULT_CINEMA_MODE = 'old'
+
+
+def normalize_cinema_mode(value) -> str | None:
+    mode = str(value).strip().lower() if value is not None else ''
+    return mode if mode in CINEMA_MODES else None
+
+
+def config_cinema_mode() -> str:
+    """Режим по умолчанию из config.yaml (ui.cinema_mode); мусор или пусто → 'old'."""
+    return normalize_cinema_mode((config.get('ui') or {}).get('cinema_mode')) or DEFAULT_CINEMA_MODE
+
+
+async def get_cinema_mode(pool) -> str:
+    """Текущий режим киноафиши: БД → config.yaml. Любая ошибка БД или повреждённое значение → прежняя афиша."""
+    try:
+        raw = await get_setting(pool, KEY_CINEMA_MODE)
+    except Exception as e:
+        logger.error(f'SETTINGS | не прочитать {KEY_CINEMA_MODE}, откат на {DEFAULT_CINEMA_MODE}: {type(e).__name__}: {e}')
+        return DEFAULT_CINEMA_MODE
+    if raw is None:
+        return config_cinema_mode()
+    mode = normalize_cinema_mode(raw)
+    if mode is None:
+        logger.error(f'SETTINGS | повреждённое значение {KEY_CINEMA_MODE}={raw!r}, откат на {DEFAULT_CINEMA_MODE}')
+        return DEFAULT_CINEMA_MODE
+    return mode
+
+
+async def resolve_cinema_mode(pool, user_id: int | None) -> str:
+    """Что показать этому пользователю: 'old' или 'new'. new_admin даёт новую афишу только админу."""
+    mode = await get_cinema_mode(pool)
+    if mode == 'new':
+        return 'new'
+    if mode == 'new_admin' and user_id is not None and user_id == config['telegram']['admin_user_id']:
+        return 'new'
+    return 'old'

@@ -6,7 +6,7 @@ from bot.keyboards.main_menu import get_main_menu_inline, MENU_TEXT
 from bot.handlers.events import EVENTS_CITY
 from bot.handlers.category_window import open_window_card
 from bot.handlers.push_links import open_favorite_card, parse_start_payload
-from bot.utils.links import parse_window_payload
+from bot.utils.links import parse_cinema_payload, parse_window_payload
 from bot.middleware.stats import update_user_stats
 from bot.utils.categories import load_menu_counts
 from bot.utils.messenger import edit_or_send
@@ -33,6 +33,15 @@ async def handle_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
                 return
         except Exception as e:                      # битая ссылка или сбой БД не должны оставить пользователя без меню
             logger.exception(f"START_WINDOW_LINK_FAILED | {type(e).__name__}: {e}")
+    cinema_card = parse_cinema_payload(args[0]) if len(args) == 1 else None
+    if cinema_card is not None:
+        # ссылка строки из списка киноафиши (/start cm_...): карточка фильма на этот день
+        try:
+            from bot.handlers.cinema_window import open_cinema_card
+            if await open_cinema_card(update, context, *cinema_card):
+                return
+        except Exception as e:
+            logger.exception(f"START_CINEMA_LINK_FAILED | {type(e).__name__}: {e}")
     menu_message_id = context.user_data.get('menu_message_id')
     context.user_data.clear()
     if menu_message_id:

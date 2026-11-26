@@ -58,6 +58,7 @@ async def handle_admin_panel(
         [InlineKeyboardButton('📨 Предпросмотр пуша', callback_data='admin_panel:push_preview')],
         [InlineKeyboardButton('🧩 Запуск дедупа', callback_data='ddr:menu')],
         [InlineKeyboardButton('🪟 Режим категорий', callback_data='uim:menu')],
+        [InlineKeyboardButton('🎬 Режим киноафиши', callback_data='cim:menu')],
         [InlineKeyboardButton('✏️ Новое сообщение', callback_data='admin_panel:new_event')],
         [InlineKeyboardButton('📤 Выгрузка пересмотров', callback_data='rvx:menu')],
         [InlineKeyboardButton('⭐ Перенос избранного (CSV)', callback_data='fvx:get')],

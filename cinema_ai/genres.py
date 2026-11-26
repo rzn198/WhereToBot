@@ -21,7 +21,7 @@ SYSTEM_PROMPT = (
     'Answer with JSON only: {"labels":{"Akcija":"боевик","Filmovi":null}}'
 )
 
-_SPLIT = re.compile(r'[,;/]+')
+_SPLIT = re.compile(r'[,;]+')            # «Romantični/ljubavni» — одна метка, по «/» не режем
 
 
 def split_terms(raw: str | None) -> list[str]:

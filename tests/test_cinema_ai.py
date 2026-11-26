@@ -110,6 +110,7 @@ def test_prompt_marks_context_and_trims_description():
 def test_split_terms_dedupes_and_trims():
     assert G.split_terms('Akcioni , Komedija,  Akcioni;Triler') == ['Akcioni', 'Komedija', 'Triler']
     assert G.split_terms(None) == [] and G.split_terms('') == []
+    assert G.split_terms('Romantični/ljubavni, Drama') == ['Romantični/ljubavni', 'Drama']       # косая черта — часть метки
 
 
 def test_parse_genres_filters_to_allowed_and_keeps_null():
