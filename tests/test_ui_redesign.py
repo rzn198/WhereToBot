@@ -27,7 +27,7 @@ def test_main_menu_has_three_rows_and_no_date_buttons():
     r = rows(kb)
     assert [len(x) for x in r[:4]] == [1, 1, 1, 1]         # четыре кнопки в четыре ряда
     assert [r[i][0][1] for i in range(3)] == ['cat:concerts', 'cat:fun', 'cat:learn']
-    assert r[3][0][1] == 'cats:menu' and 'Остальные события' in r[3][0][0]
+    assert r[3][0][1] == 'cats:menu' and r[3][0][0].startswith('➕')
     assert [r[4][0][1], r[5][0][1]] == ['cinema:menu', 'filter:favorites']      # афиша кинотеатров, затем запланированное
     assert r[5][0][0].startswith('❤️')
     cb = flat_callbacks(kb)
