@@ -109,12 +109,15 @@ COUNTS = {"concerts": 12, "fun": 3, "rest": 40, "theater": 30}
 
 def test_admin_sees_counts_on_all_three_category_buttons():
     t = texts(get_main_menu_inline(is_admin=True, counts=COUNTS))
-    assert "🎵 Концерты (12)" in t and "🎲 Игры и развлечения (3)" in t and "🗂 Остальные события (40)" in t
+    assert "🎵 Концерты (12)" in t and "🎲 Игры и развлечения (3)" in t
+    rest = [b.text for r in get_main_menu_inline(is_admin=True, counts=COUNTS).inline_keyboard for b in r if b.callback_data == 'cats:menu']
+    assert len(rest) == 1 and rest[0].endswith("(40)")
 
 
 def test_regular_user_never_sees_counts_even_if_passed():
     t = texts(get_main_menu_inline(is_admin=False, counts=COUNTS))
-    assert "🎵 Концерты" in t and "🗂 Остальные события" in t
+    assert "🎵 Концерты" in t
+    assert any(b.callback_data == 'cats:menu' for r in get_main_menu_inline(is_admin=False, counts=COUNTS).inline_keyboard for b in r)
     assert not any("(" in x for x in t)
 
 
